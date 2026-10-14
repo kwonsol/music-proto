@@ -1,0 +1,197 @@
+:root {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: #0b0b0d;
+  color: #d9dbe2;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Pretendard', 'Segoe UI', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.dj {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px;
+}
+
+.dj-stage {
+  --size: min(calc(100vw - 32px), calc(100vh - 170px), 860px);
+  position: relative;
+  width: var(--size);
+  height: var(--size);
+  background: #111;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.dj-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* 정사각형 커버 → 왜곡 없음 */
+  pointer-events: none;
+}
+.dj-loading {
+  position: absolute;
+  inset: auto 0 12px;
+  text-align: center;
+  color: #fff;
+  text-shadow: 0 1px 3px #000;
+}
+
+.dj-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+.dj-art .el {
+  cursor: grab;
+}
+.dj-art .el:active {
+  cursor: grabbing;
+}
+/* 넓은 투명 판정 영역 */
+.dj-art path.hit,
+.dj-art line.hit {
+  fill: none;
+  stroke: transparent;
+  pointer-events: stroke;
+}
+.dj-art circle.hit,
+.dj-art rect.hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: fill;
+}
+/* 호버: 은은한 번짐만 (소리는 나지 않음) */
+.dj-art .hl {
+  opacity: 0;
+  transition: opacity 0.18s;
+  pointer-events: none;
+}
+.dj-art .el:hover .hl {
+  opacity: 1;
+}
+.dj-label {
+  font: 600 26px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 4px;
+  pointer-events: none;
+}
+
+.dj-bar {
+  width: var(--size, min(calc(100vw - 32px), 860px));
+  max-width: min(calc(100vw - 32px), 860px);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.dj-bar button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid #33363f;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.dj-bar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.dj-play {
+  width: 46px;
+  height: 46px;
+  font-size: 16px !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+.dj-small {
+  width: 32px;
+  height: 32px;
+}
+.dj-vol {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9a9eab;
+}
+.dj-vol input {
+  width: 96px;
+  accent-color: var(--accent);
+}
+.dj-beat {
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+}
+.dj-beat i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.18;
+}
+.dj-beat i:first-child {
+  width: 10px;
+  height: 10px;
+}
+.dj-tempo {
+  padding: 4px 10px;
+  color: #9a9eab !important;
+}
+.dj-tempo.on {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+.dj-tempo .warn {
+  color: #e6b450;
+}
+
+.dj-help {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: min(calc(100vw - 32px), 860px);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 2px 18px;
+  color: #8a8e9a;
+  font-size: 12px;
+}
+.dj-help b {
+  color: #c9ccd5;
+  font-weight: 600;
+}
+
+.dj-errors {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  max-width: 560px;
+  margin: 0 auto;
+  background: #3a1216;
+  border: 1px solid #7a2a31;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.dj-errors p {
+  margin: 2px 0;
+}
