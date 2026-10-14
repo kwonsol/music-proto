@@ -1,109 +1,79 @@
 /**
- * Pop — 입체 큐브.
- * 구획 중심에서 바깥으로 갈수록 커지는 (불균일한) 격자를 만들고, 각 칸을 서로 다른 깊이의 블록으로 밀어 올린다.
- * 깊이는 크기·바깥 거리에 비례해 외곽 블록일수록 크게 돌출한다.
- * 앞면은 밀려난 위치의 원본을 그대로 보여 곡면과 윤곽이 이어지고, 윗면·옆면은 원본 조각을 평행사변형으로 눕히고 명암을 입힌다.
+ * Pop — 강한 픽셀레이트.
+ * 원본을 셀 크기 단위로 평균 샘플링해 "셀당 한 색"의 저해상도 이미지를 만들고, 보간 없이 확대해서 그린다.
+ * 셀 사이에 틈이나 선이 없고 모두 정사각형이다. 격자는 캔버스 기준 절대 좌표라 구획이 움직여도 이어진다.
+ * 강도가 높을수록 셀이 커진다 (기본값에서도 반사광·윤곽이 계단처럼 뭉개질 만큼 크다).
  */
-import { clamp, hash2, lerp } from '../lib/math';
-import { blit, blitAffine } from './helpers';
+import { lerp } from '../lib/math';
 import type { GenreEffect } from './types';
 
-interface Cell {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  depth: number;
+interface Cached {
+  key: string;
+  canvas: HTMLCanvasElement;
+}
+const cache = new WeakMap<HTMLCanvasElement, Cached>();
+
+/** 원본을 cols×rows 로 줄인 캔버스. 2배씩 줄이는 평균(2x2 box)으로 만들어 셀 색이 영역 평균이 된다. */
+function lowRes(src: HTMLCanvasElement, cs: number, cols: number, rows: number): HTMLCanvasElement {
+  const key = `${src.dataset.v ?? ''}|${src.width}x${src.height}|${cs}`;
+  const hit = cache.get(src);
+  if (hit && hit.key === key) return hit.canvas;
+  // 셀 격자(cols×rows)보다 약간 큰 영역을 먼저 만든다 — 원본을 격자 크기로 패딩(가장자리 색 연장)
+  let cur = document.createElement('canvas');
+  cur.width = cols * cs;
+  cur.height = rows * cs;
+  const g = cur.getContext('2d')!;
+  g.drawImage(src, 0, 0);
+  // 오른쪽·아래 패딩은 마지막 픽셀 줄/점을 늘려 채운다 (원본에서 직접 복사: 자기 자신을 복사하지 않는다)
+  const padW = cur.width - src.width;
+  const padH = cur.height - src.height;
+  if (padW > 0) g.drawImage(src, src.width - 1, 0, 1, src.height, src.width, 0, padW, src.height);
+  if (padH > 0) g.drawImage(src, 0, src.height - 1, src.width, 1, 0, src.height, src.width, padH);
+  if (padW > 0 && padH > 0) g.drawImage(src, src.width - 1, src.height - 1, 1, 1, src.width, src.height, padW, padH);
+  // cs 가 2의 거듭제곱이 아니어도 평균이 되도록: 정수 배율(2)로 줄이다가 마지막 한 번만 남은 비율로 축소
+  let w = cur.width;
+  let h = cur.height;
+  let ratio = cs;
+  while (ratio >= 2 && Math.floor(w / 2) >= cols && Math.floor(h / 2) >= rows && ratio / 2 >= 1) {
+    const nxt = document.createElement('canvas');
+    nxt.width = Math.max(cols, Math.round(w / 2));
+    nxt.height = Math.max(rows, Math.round(h / 2));
+    const c = nxt.getContext('2d')!;
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(cur, 0, 0, nxt.width, nxt.height);
+    cur = nxt;
+    w = nxt.width;
+    h = nxt.height;
+    ratio /= 2;
+  }
+  const out = document.createElement('canvas');
+  out.width = cols;
+  out.height = rows;
+  const o = out.getContext('2d')!;
+  o.imageSmoothingEnabled = true;
+  o.imageSmoothingQuality = 'high';
+  o.drawImage(cur, 0, 0, cols, rows);
+  cache.set(src, { key, canvas: out });
+  return out;
 }
 
-/** 중심에서 바깥으로 갈수록 커지고, 단계마다 크기가 불균일하게 흔들리는 분할점 */
-function breaks(center: number, lo: number, hi: number, minS: number, maxS: number, reach: number, seed: number): number[] {
-  const size = (d: number, n: number) =>
-    lerp(minS, maxS, Math.pow(clamp(d / reach, 0, 1), 1.1)) * (0.7 + 0.65 * hash2(n, seed));
-  const pts = [center];
-  for (let p = center, n = 0; p < hi && n < 90; n++) pts.push((p += size(p - center, n)));
-  for (let p = center, n = 0; p > lo && n < 90; n++) pts.unshift((p -= size(center - p, -n - 1)));
-  return pts;
-}
-
-export const popEffect: GenreEffect = ({ ctx, src, rect, time, intensity: I }) => {
+export const popEffect: GenreEffect = ({ ctx, src, rect, intensity: I }) => {
   const { x, y, w, h } = rect;
-  blit(ctx, src, x, y, w, h, x, y, w, h);
-  if (I <= 0.001) return;
-
-  const Dc = Math.min(src.width, src.height);
-  const minS = Math.max(6, Dc * 0.013, Math.sqrt((w * h) / 1300));
-  const maxS = Math.max(minS * 2, Math.min(Math.min(w, h) * 0.5, Dc * lerp(0.05, 0.22, I)));
-  const cx = x + w * (0.5 + 0.16 * Math.sin(time * 0.37));
-  const cy = y + h * (0.5 + 0.16 * Math.cos(time * 0.29));
-  const reach = Math.max(cx - x, x + w - cx, cy - y, y + h - cy);
-  const xs = breaks(cx, x - maxS, x + w + maxS, minS, maxS, reach, 11);
-  const ys = breaks(cy, y - maxS, y + h + maxS, minS, maxS, reach, 23);
-  const ci = xs.indexOf(cx);
-  const cj = ys.indexOf(cy);
-
-  const ang = -0.8 + 0.3 * Math.sin(time * 0.33);
-  const dirX = Math.cos(ang);
-  const dirY = Math.sin(ang);
-  const cells: Cell[] = [];
-  for (let j = 0; j < ys.length - 1; j++) {
-    for (let i = 0; i < xs.length - 1; i++) {
-      if (xs[i + 1] < x - maxS || xs[i] > x + w + maxS || ys[j + 1] < y - maxS || ys[j] > y + h + maxS) continue;
-      const cw = xs[i + 1] - xs[i];
-      const ch = ys[j + 1] - ys[j];
-      const hv = hash2(i - ci, j - cj);
-      const bob = 0.8 + 0.2 * Math.sin(time * 1.1 + hv * 6.28);
-      // 바깥일수록 더 높이 솟는다
-      const rad = clamp(Math.hypot(xs[i] + cw / 2 - cx, ys[j] + ch / 2 - cy) / reach, 0, 1);
-      const depth = Math.min(cw, ch) * I * 1.7 * (0.25 + 0.75 * hv) * (0.2 + 0.8 * rad) * bob;
-      cells.push({ x: xs[i], y: ys[j], w: cw, h: ch, depth });
-    }
+  if (I <= 0.001) {
+    ctx.drawImage(src, x, y, w, h, x, y, w, h);
+    return;
   }
-  cells.sort((a, b) => a.depth - b.depth); // 높은 블록이 위에 온다
-
-  for (const c of cells) {
-    const dx = dirX * c.depth;
-    const dy = dirY * c.depth;
-    if (c.depth >= 1.5) {
-      // 윗면(또는 아랫면)
-      const ty = dy < 0 ? c.y : c.y + c.h;
-      const t = Math.max(1, Math.min(Math.abs(dy), c.h));
-      blitAffine(ctx, src, c.x, dy < 0 ? c.y : c.y + c.h - t, c.w, t, c.x, ty, c.w, 0, dx, dy);
-      ctx.fillStyle = 'rgba(255,255,255,0.26)';
-      ctx.beginPath();
-      ctx.moveTo(c.x, ty);
-      ctx.lineTo(c.x + c.w, ty);
-      ctx.lineTo(c.x + c.w + dx, ty + dy);
-      ctx.lineTo(c.x + dx, ty + dy);
-      ctx.fill();
-      // 옆면
-      const tx = dx > 0 ? c.x + c.w : c.x;
-      const tw = Math.max(1, Math.min(Math.abs(dx), c.w));
-      blitAffine(ctx, src, dx > 0 ? c.x + c.w - tw : c.x, c.y, tw, c.h, tx, c.y, dx, dy, 0, c.h);
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.beginPath();
-      ctx.moveTo(tx, c.y);
-      ctx.lineTo(tx + dx, c.y + dy);
-      ctx.lineTo(tx + dx, c.y + c.h + dy);
-      ctx.lineTo(tx, c.y + c.h);
-      ctx.fill();
-    }
-    if (c.depth >= 1.5) {
-      // 앞면 아래·왼쪽 접촉 그림자: 블록이 떠 있는 느낌
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
-      ctx.fillRect(c.x + dx - 1, c.y + dy + c.h, c.w + 1, 2);
-      ctx.fillRect(c.x + dx - 2, c.y + dy, 2, c.h);
-    }
-    // 앞면: 자기 위치와 밀려난 위치의 중간 지점 텍스처를 사용 → 곡면·윤곽은 이어지고 블록 경계는 또렷해진다
-    blit(ctx, src, c.x + dx * 0.4, c.y + dy * 0.4, c.w, c.h, c.x + dx, c.y + dy, c.w, c.h);
-    if (c.depth >= 5) {
-      // 앞면 가장자리 하이라이트(윗/왼쪽)와 어두운 모서리(아래/오른쪽)
-      ctx.fillStyle = 'rgba(255,255,255,0.38)';
-      ctx.fillRect(c.x + dx, c.y + dy, c.w, 1.5);
-      ctx.fillRect(c.x + dx, c.y + dy, 1.5, c.h);
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fillRect(c.x + dx, c.y + dy + c.h - 1.5, c.w, 1.5);
-      ctx.fillRect(c.x + dx + c.w - 1.5, c.y + dy, 1.5, c.h);
-    }
-  }
+  const D = Math.min(src.width, src.height);
+  const cs = Math.max(4, Math.round(D * lerp(0.035, 0.2, I))); // 정수 픽셀의 정사각형 셀
+  const cols = Math.ceil(src.width / cs);
+  const rows = Math.ceil(src.height / cs);
+  const low = lowRes(src, cs, cols, rows);
+  const i0 = Math.floor(x / cs);
+  const j0 = Math.floor(y / cs);
+  const i1 = Math.min(cols, Math.ceil((x + w) / cs));
+  const j1 = Math.min(rows, Math.ceil((y + h) / cs));
+  ctx.imageSmoothingEnabled = false; // 보간 없이 확대 → 단색 정사각형 덩어리
+  ctx.drawImage(low, i0, j0, i1 - i0, j1 - j0, i0 * cs, j0 * cs, (i1 - i0) * cs, (j1 - j0) * cs);
+  ctx.imageSmoothingEnabled = true;
 };

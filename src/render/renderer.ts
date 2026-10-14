@@ -1,6 +1,6 @@
 import { EFFECTS, type PxRect } from '../effects';
 import { GENRE_LABEL, type GenreId } from '../lib/genres';
-import type { Rect } from '../layout/partition';
+import type { Box } from '../layout/boxes';
 
 export const BORDER_COLOR = '#39ff14';
 
@@ -10,7 +10,7 @@ export interface FrameInput {
   /** 논리 좌표계 크기 (레이아웃이 계산된 공간) */
   logicalW: number;
   logicalH: number;
-  rects: Rect[];
+  boxes: Box[];
   fxTime: number;
   intensity: Record<GenreId, number>;
   /** 장르별 보조 옵션 (hiphop 기울기, rnb 모자이크) */
@@ -23,7 +23,7 @@ export interface FrameInput {
 }
 
 /** 논리 사각형 -> 정수 픽셀 사각형. 공유되는 모서리는 같은 값으로 반올림되어 빈틈·겹침이 생기지 않는다. */
-export function toPx(r: Rect, sx: number, sy: number): PxRect {
+export function toPx(r: { x: number; y: number; w: number; h: number }, sx: number, sy: number): PxRect {
   const x0 = Math.round(r.x * sx);
   const y0 = Math.round(r.y * sy);
   return { x: x0, y: y0, w: Math.round((r.x + r.w) * sx) - x0, h: Math.round((r.y + r.h) * sy) - y0 };
@@ -77,47 +77,39 @@ export function drawFrame(f: FrameInput) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
 
-  if (f.rects.length === 0) {
-    ctx.drawImage(src, 0, 0);
-    return;
-  }
-
-  ctx.fillStyle = '#000';
+  // 배경은 실제 흰색. 사진은 각 박스 안에서만 그려진다 (박스 밖·박스 사이는 흰 여백)
+  ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, cw, ch);
-  const px = f.rects.map((r) => toPx(r, sx, sy));
-  f.rects.forEach((r, i) => drawRegion(ctx, src, px[i], r.genre, r.slot, f.fxTime, f.intensity[r.genre], f.options[r.genre]));
+  if (f.boxes.length === 0) return;
+
+  const px = f.boxes.map((b) => toPx(b, sx, sy));
+  // 배열 뒤쪽이 위. 각 박스는 자기 영역을 통째로 덮어쓰므로 겹친 곳은 맨 위 박스의 효과만 보인다 (중첩 적용 없음)
+  f.boxes.forEach((b, i) => drawRegion(ctx, src, px[i], b.genre, 0, f.fxTime, f.intensity[b.genre], f.options[b.genre]));
 
   if (!f.showBoxes) return;
   const u = Math.max(1, Math.min(cw, ch) / 800); // 화면 크기에 따라 선·글자 크기 보정
-  ctx.strokeStyle = BORDER_COLOR;
-  ctx.lineWidth = Math.max(1, Math.round(u));
-  px.forEach((p, i) => {
-    if (p.w < 4 || p.h < 4 || f.blink.has(f.rects[i].id)) return;
-    const o = ctx.lineWidth / 2;
-    ctx.strokeRect(p.x + o, p.y + o, p.w - ctx.lineWidth, p.h - ctx.lineWidth);
-  });
-
-  // 라벨은 장르마다 가장 큰 구획에 한 번만
-  const biggest = new Map<GenreId, number>();
-  f.rects.forEach((r, i) => {
-    const cur = biggest.get(r.genre);
-    if (cur === undefined || r.w * r.h > f.rects[cur].w * f.rects[cur].h) biggest.set(r.genre, i);
-  });
+  const lw = Math.max(1, Math.round(u));
   ctx.font = `600 ${Math.round(11 * u + 1)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   ctx.textBaseline = 'top';
-  biggest.forEach((i, genre) => {
+  f.boxes.forEach((b, i) => {
     const p = px[i];
-    if (f.blink.has(f.rects[i].id)) return;
-    const pct = f.percent[genre] ?? 0;
-    const text = `${GENRE_LABEL[genre]} ${Math.round(pct * 10) / 10}%`;
-    const padX = 4 * u;
-    const tw = ctx.measureText(text).width + padX * 2;
+    if (f.blink.has(b.id) || p.w < 4 || p.h < 4) return;
+    // 흰 배경에서도 보이도록 어두운 바깥선 + 형광 초록 선
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = lw;
+    ctx.strokeRect(p.x - lw / 2, p.y - lw / 2, p.w + lw, p.h + lw);
+    ctx.strokeStyle = BORDER_COLOR;
+    ctx.strokeRect(p.x + lw / 2, p.y + lw / 2, p.w - lw, p.h - lw);
+
+    const text = `${GENRE_LABEL[b.genre]} ${Math.round((f.percent[b.genre] ?? 0) * 10) / 10}%`;
+    const tw = ctx.measureText(text).width + 8 * u;
     const lh = 15 * u;
-    if (p.w < tw + 4 || p.h < lh + 4) return;
-    ctx.fillStyle = 'rgba(0,0,0,0.62)';
-    ctx.fillRect(p.x + ctx.lineWidth, p.y + ctx.lineWidth, tw, lh);
+    const inside = p.y < lh + 2; // 위쪽 여백이 없으면 박스 안쪽에
+    const ly = inside ? p.y + lw : p.y - lh - lw;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(p.x, ly, tw, lh);
     ctx.fillStyle = BORDER_COLOR;
-    ctx.fillText(text, p.x + ctx.lineWidth + padX, p.y + ctx.lineWidth + 2.5 * u);
+    ctx.fillText(text, p.x + 4 * u, ly + 2.5 * u);
   });
 }
 
@@ -132,6 +124,7 @@ export function prepareSource(
 ) {
   target.width = w;
   target.height = h;
+  target.dataset.v = String((Number(target.dataset.v) || 0) + 1);
   const c = target.getContext('2d')!;
   c.fillStyle = '#111';
   c.fillRect(0, 0, w, h);

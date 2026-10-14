@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { GENRE_IDS, type GenreId } from '../lib/genres';
 import type { Ratios } from '../lib/ratios';
-import { computeLayout, genreAreas, type GenreShare, type Rect } from '../layout/partition';
+import { AREA_BUDGET, BoxTracker, boxAreas, type Box, type GenreShare } from '../layout/boxes';
+import type { Point } from '../layout/features';
 import { drawFrame, prepareSource } from '../render/renderer';
 import { clipSelfTest } from '../render/selftest';
 
@@ -13,6 +14,8 @@ export interface LoadedImage {
   source: CanvasImageSource;
   width: number;
   height: number;
+  /** 정규화(0..1) 특징점 — 박스가 탐지·추적하는 대상 후보 */
+  features: Point[];
 }
 
 interface Props {
@@ -29,13 +32,13 @@ interface Props {
   children?: React.ReactNode;
 }
 
-interface Runtime {
-  tau: number;
-  fx: number;
-  rects: Rect[];
-  geom: Map<string, string>;
-  changedAt: Map<string, number>;
-  logicalH: number;
+/** 이미지 정규화 좌표 -> 캔버스 논리 좌표 (원본이 캔버스를 cover 로 채우는 방식과 동일) */
+function mapFeatures(img: LoadedImage | null, W: number, H: number): Point[] {
+  if (!img) return [];
+  const s = Math.max(W / img.width, H / img.height);
+  const ox = (W - img.width * s) / 2;
+  const oy = (H - img.height * s) / 2;
+  return img.features.map((p) => ({ x: ox + p.x * img.width * s, y: oy + p.y * img.height * s, weight: p.weight }));
 }
 
 export function Stage(props: Props) {
@@ -45,13 +48,13 @@ export function Stage(props: Props) {
   const propsRef = useRef(props);
   propsRef.current = props;
   const dirty = useRef(true);
-  const rt = useRef<Runtime>({
-    tau: 0,
+  const trackerRef = useRef(new BoxTracker(7));
+  const rt = useRef({
     fx: 0,
-    rects: [],
-    geom: new Map(),
-    changedAt: new Map(),
+    boxes: [] as Box[],
     logicalH: LOGICAL_W * 0.75,
+    cfgKey: '',
+    ratiosRef: null as Ratios | null,
   });
   const [box, setBox] = useState({ w: 0, h: 0 });
 
@@ -71,7 +74,7 @@ export function Stage(props: Props) {
   const pxW = Math.max(2, Math.round(fitW * scale));
   const pxH = Math.max(2, Math.round(fitH * scale));
 
-  // 원본을 캔버스 해상도로 한 번만 준비 (모든 구획이 공유)
+  // 원본을 캔버스 해상도로 한 번만 준비 (모든 박스가 같은 좌표계의 이 한 장을 공유)
   useEffect(() => {
     const cv = canvasRef.current!;
     cv.width = pxW;
@@ -86,8 +89,8 @@ export function Stage(props: Props) {
   });
 
   useEffect(() => {
-    rt.current.tau = 0;
     rt.current.fx = 0;
+    rt.current.cfgKey = ''; // 박스를 처음 상태로 다시 잡는다
     dirty.current = true;
   }, [props.resetToken]);
 
@@ -103,41 +106,46 @@ export function Stage(props: Props) {
       const cv = canvasRef.current;
       if (!cv || cv.width < 2) return;
 
-      if (p.playing) {
-        s.fx += dt;
-        s.tau += dt * p.freq;
-      }
-      if (!p.playing && !dirty.current) return;
-      dirty.current = false;
-
       const logicalH = LOGICAL_W / p.aspect;
-      // 비율은 즉시 반영(보간 없음)
       const shares: GenreShare[] = GENRE_IDS.filter((g) => (p.ratios[g] ?? 0) > 1e-9).map((g) => ({
         id: g,
         share: p.ratios[g] as number,
       }));
-      const total = shares.reduce((a, b) => a + b.share, 0) || 1;
-      const rects = computeLayout(shares, LOGICAL_W, logicalH, s.tau);
-      s.rects = rects;
-      s.logicalH = logicalH;
-      // 구획이 컷 전환된 순간을 찾아 그 구획의 테두리·라벨만 잠깐 끈다
-      const nextGeom = new Map<string, string>();
-      for (const r of rects) {
-        const gk = `${r.x.toFixed(2)}|${r.y.toFixed(2)}|${r.w.toFixed(2)}|${r.h.toFixed(2)}`;
-        nextGeom.set(r.id, gk);
-        if (s.geom.get(r.id) !== gk) s.changedAt.set(r.id, s.fx);
+      const tracker = trackerRef.current;
+      // 이미지·캔버스 비율이 바뀌면 박스를 새로 잡고, 비율만 바뀌면 박스 면적만 갱신한다
+      const cfgKey = `${p.aspect}|${p.image?.width}x${p.image?.height}|${p.image?.features.length}`;
+      if (cfgKey !== s.cfgKey) {
+        s.cfgKey = cfgKey;
+        s.ratiosRef = p.ratios;
+        tracker.configure(LOGICAL_W, logicalH, mapFeatures(p.image, LOGICAL_W, logicalH), shares);
+        dirty.current = true;
+      } else if (s.ratiosRef !== p.ratios) {
+        s.ratiosRef = p.ratios;
+        tracker.setShares(shares);
+        dirty.current = true;
       }
-      s.geom = nextGeom;
-      const blink = new Set<string>();
-      for (const r of rects) if (s.fx - (s.changedAt.get(r.id) ?? -9) < BLINK_SEC && p.playing) blink.add(r.id);
+
+      if (p.playing) {
+        s.fx += dt;
+        tracker.step(dt * p.freq, s.fx);
+      } else if (!dirty.current) return;
+      dirty.current = false;
+
+      const boxes = tracker.boxes();
+      s.boxes = boxes;
+      s.logicalH = logicalH;
+      const total = shares.reduce((a, b) => a + b.share, 0) || 1;
       const percent: Partial<Record<GenreId, number>> = {};
       for (const sh of shares) percent[sh.id] = (sh.share / total) * 100;
+      // 방금 재탐지한 박스는 테두리·라벨만 잠깐 끈다 (사진은 그대로)
+      const blink = new Set<string>();
+      if (p.playing) for (const b of boxes) if (s.fx - b.lastEvent < BLINK_SEC && b.lastEvent > 0) blink.add(b.id);
       drawFrame({
         ctx: cv.getContext('2d')!,
         src: srcRef.current,
         logicalW: LOGICAL_W,
         logicalH,
-        rects,
+        boxes,
         fxTime: s.fx,
         intensity: p.intensity,
         options: p.options,
@@ -156,20 +164,32 @@ export function Stage(props: Props) {
       audit() {
         const s = rt.current;
         const total = LOGICAL_W * s.logicalH;
-        const areas = genreAreas(s.rects);
+        const areas = boxAreas(s.boxes);
+        const sum = s.boxes.reduce((a, b) => a + b.w * b.h, 0);
         const pct: Record<string, number> = {};
-        for (const [k, v] of Object.entries(areas)) pct[k] = ((v as number) / total) * 100;
-        let overlap = 0;
-        for (let i = 0; i < s.rects.length; i++)
-          for (let j = i + 1; j < s.rects.length; j++) {
-            const a = s.rects[i];
-            const b = s.rects[j];
-            const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-            const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
-            if (w > 0 && h > 0) overlap += w * h;
+        for (const [k, v] of Object.entries(areas)) pct[k] = ((v as number) / sum) * 100;
+        // 합집합 면적(흰 여백 = 1 - union)을 격자 샘플로 계산
+        const N = 200;
+        let covered = 0;
+        for (let j = 0; j < N; j++)
+          for (let i = 0; i < N; i++) {
+            const x = ((i + 0.5) / N) * LOGICAL_W;
+            const y = ((j + 0.5) / N) * s.logicalH;
+            if (s.boxes.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)) covered++;
           }
-        const sum = s.rects.reduce((a, r) => a + r.w * r.h, 0);
-        return { rects: s.rects.length, pct, coverage: sum / total, overlap, tau: s.tau, geometry: s.rects.map((r) => [r.id, r.x, r.y, r.w, r.h] as const) };
+        const inside = s.boxes.every(
+          (b) => b.x >= -1e-6 && b.y >= -1e-6 && b.x + b.w <= LOGICAL_W + 1e-6 && b.y + b.h <= s.logicalH + 1e-6,
+        );
+        return {
+          count: s.boxes.length,
+          pct,
+          budget: sum / total,
+          expectedBudget: AREA_BUDGET,
+          whiteFraction: 1 - covered / (N * N),
+          inside,
+          fx: s.fx,
+          boxes: s.boxes.map((b) => ({ id: b.id, x: b.x, y: b.y, w: b.w, h: b.h, aspect: b.w / b.h, area: b.w * b.h })),
+        };
       },
       clipSelfTest,
     };

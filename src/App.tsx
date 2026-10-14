@@ -4,10 +4,23 @@ import { Stage, type LoadedImage } from './components/Stage';
 import { GENRE_IDS, type GenreId } from './lib/genres';
 import { DEFAULT_RATIOS, setRatio, toggleGenre, type Ratios } from './lib/ratios';
 import defaultApple from './assets/default-apple.webp';
+import { DEFAULT_APPLE_FEATURES, detectFeatures } from './layout/features';
 
 const DEFAULT_INTENSITY = 0.6;
 const defaultIntensity = () =>
   Object.fromEntries(GENRE_IDS.map((g) => [g, DEFAULT_INTENSITY])) as Record<GenreId, number>;
+
+/** 업로드한 이미지에서 박스가 잡을 특징점을 찾는다 (저해상도 돌출도 분석, 브라우저 안에서만 처리) */
+function analyze(bmp: ImageBitmap) {
+  const w = 96;
+  const h = Math.max(24, Math.round((96 * bmp.height) / bmp.width));
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(bmp, 0, 0, w, h);
+  return detectFeatures(g.getImageData(0, 0, w, h).data, w, h);
+}
 
 const defaultOptions = () => ({ pop: 0, hiphop: 0.6, electronic: 0, rock: 0, rnb: 0 }) as Record<GenreId, number>;
 
@@ -31,7 +44,7 @@ export default function App() {
     }
     try {
       const bmp = await createImageBitmap(file);
-      setImage({ source: bmp, width: bmp.width, height: bmp.height });
+      setImage({ source: bmp, width: bmp.width, height: bmp.height, features: analyze(bmp) });
       setError('');
     } catch {
       setError('이미지를 읽지 못했어요. 다른 파일을 시도해 주세요.');
@@ -41,7 +54,7 @@ export default function App() {
   const loadDefault = useCallback(() => {
     const img = new Image();
     img.onload = () => {
-      setImage({ source: img, width: img.naturalWidth, height: img.naturalHeight });
+      setImage({ source: img, width: img.naturalWidth, height: img.naturalHeight, features: DEFAULT_APPLE_FEATURES });
       setError('');
     };
     img.src = defaultApple;
@@ -50,7 +63,8 @@ export default function App() {
   // 첫 실행부터 기본 사과 사진을 불러온다
   useEffect(() => {
     const img = new Image();
-    img.onload = () => setImage((cur) => cur ?? { source: img, width: img.naturalWidth, height: img.naturalHeight });
+    img.onload = () =>
+      setImage((cur) => cur ?? { source: img, width: img.naturalWidth, height: img.naturalHeight, features: DEFAULT_APPLE_FEATURES });
     img.src = defaultApple;
   }, []);
 
