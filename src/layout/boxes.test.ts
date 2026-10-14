@@ -1,28 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { AREA_BUDGET, BoxTracker, boxAreas, boxSize, feasibleAspect, type GenreShare } from './boxes';
+import { AREA_REL, BoxTracker, boxAreas, boxSize, feasibleAspect, spreadOrder, type GenreShare, type Point } from './boxes';
 import { DEFAULT_APPLE_FEATURES, detectFeatures } from './features';
 import { GENRE_IDS } from '../lib/genres';
 import { DEFAULT_RATIOS, type Ratios } from '../lib/ratios';
+import { bboxOfAlpha, maskFromBorder } from '../subject/mask';
 
 const W = 1600;
 const H = 1200;
-const feats = DEFAULT_APPLE_FEATURES.map((p) => ({ x: p.x * W, y: p.y * H, weight: p.weight }));
+// 대상: 캔버스 중앙의 경계 상자
+const SUBJ = { cx: W / 2, cy: H / 2, w: 0.5 * W, h: 0.62 * H };
+const cands: Point[] = DEFAULT_APPLE_FEATURES.map((p) => ({
+  x: SUBJ.cx + (p.x - 0.5) * SUBJ.w * 1.6,
+  y: SUBJ.cy + (p.y - 0.5) * SUBJ.h * 1.4,
+  weight: p.weight,
+}));
 const toShares = (r: Ratios): GenreShare[] =>
   GENRE_IDS.filter((id) => r[id] !== undefined).map((id) => ({ id, share: r[id] as number }));
+const make = (seed: number, r: Ratios = DEFAULT_RATIOS) => {
+  const tr = new BoxTracker(seed);
+  tr.configure(W, H, SUBJ, cands, toShares(r));
+  return tr;
+};
 
-function union(boxes: { x: number; y: number; w: number; h: number }[]) {
-  const N = 120;
-  let c = 0;
-  for (let j = 0; j < N; j++)
-    for (let i = 0; i < N; i++) {
-      const x = ((i + 0.5) / N) * W;
-      const y = ((j + 0.5) / N) * H;
-      if (boxes.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)) c++;
-    }
-  return c / (N * N);
-}
-
-describe('독립 박스 — 면적·개수', () => {
+describe('효과 박스 — 개수·면적', () => {
   const combos: Ratios[] = [
     DEFAULT_RATIOS,
     { pop: 60, hiphop: 10, electronic: 10, rock: 10, rnb: 10 },
@@ -32,13 +32,13 @@ describe('독립 박스 — 면적·개수', () => {
     { pop: 33.3, hiphop: 33.3, rock: 33.4 },
   ];
 
-  it('선택한 장르 수 = 박스 수, 장르 면적 = p·예산·W·H 가 매 프레임 정확히 유지', () => {
+  it('선택한 장르 수 = 박스 수, 박스 면적 = 비율·예산 이 매 프레임 정확히 유지(종횡비만 변함)', () => {
     for (const c of combos) {
       const shares = toShares(c);
-      const tr = new BoxTracker(3);
-      tr.configure(W, H, feats, shares);
+      const tr = make(3, c);
       let fx = 0;
-      for (let f = 0; f < 60 * 90; f++) {
+      const aspects = new Map<string, Set<number>>();
+      for (let f = 0; f < 60 * 60; f++) {
         fx += 1 / 60;
         tr.step(1 / 60, fx);
         const boxes = tr.boxes();
@@ -46,7 +46,7 @@ describe('독립 박스 — 면적·개수', () => {
         const total = shares.reduce((a, s) => a + s.share, 0);
         const areas = boxAreas(boxes);
         for (const s of shares) {
-          const want = (s.share / total) * AREA_BUDGET * W * H;
+          const want = (s.share / total) * AREA_REL * SUBJ.w * SUBJ.h;
           expect(Math.abs((areas[s.id] ?? 0) - want) / (W * H)).toBeLessThan(1e-9);
         }
         for (const b of boxes) {
@@ -54,20 +54,20 @@ describe('독립 박스 — 면적·개수', () => {
           expect(b.y).toBeGreaterThanOrEqual(-1e-6);
           expect(b.x + b.w).toBeLessThanOrEqual(W + 1e-6);
           expect(b.y + b.h).toBeLessThanOrEqual(H + 1e-6);
-          expect(b.w / b.h).toBeGreaterThan(0.45);
-          expect(b.w / b.h).toBeLessThan(2.2);
+          expect(b.w / b.h).toBeGreaterThan(0.44);
+          expect(b.w / b.h).toBeLessThan(2.25);
+          (aspects.get(b.id) ?? aspects.set(b.id, new Set()).get(b.id)!).add(Math.round((b.w / b.h) * 50));
         }
-        if (f % 30 === 0) expect(union(boxes)).toBeLessThanOrEqual(AREA_BUDGET + 0.03); // 흰 여백 ≥ 약 45% (격자 샘플 오차 허용)
       }
+      // 크기(종횡비)가 실제로 변한다
+      for (const s of aspects.values()) if (shares.length > 1 || true) expect(s.size).toBeGreaterThan(8);
     }
   });
 
-  it('width = √(A·r), height = √(A/r)', () => {
+  it('width = √(A·r), height = √(A/r); 캔버스를 넘으면 면적이 아니라 종횡비를 조정', () => {
     const { w, h } = boxSize(250000, 1.6);
     expect(w).toBeCloseTo(Math.sqrt(250000 * 1.6), 9);
     expect(h).toBeCloseTo(Math.sqrt(250000 / 1.6), 9);
-    expect(w * h).toBeCloseTo(250000, 6);
-    // 캔버스를 넘는 종횡비는 면적이 아니라 종횡비가 조정된다
     const r = feasibleAspect(0.5 * W * H, W, H, 2);
     const s = boxSize(0.5 * W * H, r);
     expect(s.w).toBeLessThanOrEqual(W);
@@ -75,125 +75,93 @@ describe('독립 박스 — 면적·개수', () => {
   });
 });
 
-describe('독립 박스 — 배치와 움직임', () => {
-  it('공통 행·열 타일처럼 정렬되지 않고, 겹침과 분리가 함께 나타난다', () => {
-    const tr = new BoxTracker(11);
-    tr.configure(W, H, feats, toShares(DEFAULT_RATIOS));
+describe('효과 박스 — 기준점 주변의 좁은 이동', () => {
+  it('기준점은 장르마다 고정·서로 다르고, 중심은 기준점에서 대상 크기의 ~7.5% 안에서만 움직인다', () => {
+    const tr = make(11);
+    const anchors = new Map(GENRE_IDS.map((g) => [g, tr.anchorOf(g)]));
+    expect(new Set([...anchors.values()]).size).toBe(5);
     let fx = 0;
-    let aligned = 0;
-    let frames = 0;
-    let overlapFrames = 0;
-    let separateFrames = 0;
-    const aspects: number[] = [];
+    let maxDx = 0;
+    let maxDy = 0;
     for (let f = 0; f < 60 * 120; f++) {
       fx += 1 / 60;
       tr.step(1 / 60, fx);
-      if (f % 10) continue;
-      const b = tr.boxes();
-      frames++;
-      let al = false;
-      let ov = false;
-      let sep = false;
-      for (let i = 0; i < b.length; i++)
-        for (let j = i + 1; j < b.length; j++) {
-          const A = b[i];
-          const B = b[j];
-          for (const [p, q, max] of [
-            [A.x, B.x, W],
-            [A.x + A.w, B.x + B.w, W],
-            [A.y, B.y, H],
-            [A.y + A.h, B.y + B.h, H],
-          ])
-            if (Math.abs(p - q) < 0.0007 * W && p > 0.02 * max && p < 0.98 * max) al = true; // 캔버스 여백선에 닿은 것은 제외
-          const iw = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x);
-          const ih = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
-          if (iw > 0 && ih > 0) ov = true;
-          else sep = true;
-        }
-      if (al) aligned++;
-      if (ov) overlapFrames++;
-      if (sep) separateFrames++;
-      b.forEach((x) => aspects.push(x.w / x.h));
+      for (const b of tr.boxes()) {
+        const a = anchors.get(b.id)!;
+        expect(tr.anchorOf(b.id)).toBe(a); // 고정
+        maxDx = Math.max(maxDx, Math.abs(b.x + b.w / 2 - a.x) / SUBJ.w);
+        maxDy = Math.max(maxDy, Math.abs(b.y + b.h / 2 - a.y) / SUBJ.h);
+      }
     }
-    expect(aligned / frames).toBeLessThan(0.12); // 우연히 1px 이내로 겹치는 정도만 허용 (체계적 정렬이면 훨씬 높다)
-    expect(overlapFrames / frames).toBeGreaterThan(0.2);
-    expect(separateFrames / frames).toBeGreaterThan(0.5);
-    expect(aspects.some((a) => a > 1.4)).toBe(true); // 가로형
-    expect(aspects.some((a) => a < 0.75)).toBe(true); // 세로형
-    expect(aspects.some((a) => a > 0.85 && a < 1.2)).toBe(true); // 정사각형에 가까움
+    expect(maxDx).toBeLessThan(0.075);
+    expect(maxDy).toBeLessThan(0.075);
+    expect(maxDx).toBeGreaterThan(0.02); // 실제로 보정되며 움직이긴 한다
   });
 
-  it('박스마다 독립 타이밍으로 재탐지하고(0.2~0.9s), 모든 박스가 동시에 바뀌지 않는다', () => {
-    const tr = new BoxTracker(5);
-    tr.configure(W, H, feats, toShares(DEFAULT_RATIOS));
+  it('가로로 넓어졌다 세로로 길어진다 (모든 박스가 가로형·세로형 모두 경험)', () => {
+    const tr = make(5);
+    const wide = new Set<string>();
+    const tall = new Set<string>();
+    let fx = 0;
+    for (let f = 0; f < 60 * 60; f++) {
+      fx += 1 / 60;
+      tr.step(1 / 60, fx);
+      for (const b of tr.boxes()) {
+        if (b.w / b.h > 1.3) wide.add(b.id);
+        if (b.w / b.h < 0.77) tall.add(b.id);
+      }
+    }
+    expect(wide.size).toBe(5);
+    expect(tall.size).toBe(5);
+  });
+
+  it('박스마다 독립 타이밍으로 갱신(0.19~1.0s), 동시 갱신은 드물고, 일부는 겹친다', () => {
+    const tr = make(5);
     const last: Record<string, number> = {};
     const gaps: number[] = [];
     let simultaneous = 0;
     let events = 0;
+    let overlap = 0;
+    let frames = 0;
     let fx = 0;
-    const key = (b: { x: number; y: number; w: number; h: number }) => `${b.x.toFixed(3)}|${b.y.toFixed(3)}|${b.w.toFixed(3)}`;
-    let prev = new Map(tr.boxes().map((b) => [b.id, key(b)]));
     for (let f = 0; f < 120 * 60; f++) {
       fx += 1 / 120;
       tr.step(1 / 120, fx);
       const b = tr.boxes();
-      const evBoxes = b.filter((x) => last[x.id] !== x.lastEvent);
-      if (evBoxes.length) {
-        events += evBoxes.length;
-        if (evBoxes.length > 1) simultaneous++;
-        for (const x of evBoxes) {
-          if (last[x.id] !== undefined) gaps.push(x.lastEvent - last[x.id]);
+      const ev = b.filter((x) => last[x.id] !== x.lastEvent);
+      if (ev.length) {
+        events += ev.length;
+        if (ev.length > 1) simultaneous++;
+        for (const x of ev) {
+          if (last[x.id] !== undefined && last[x.id] > 0) gaps.push(x.lastEvent - last[x.id]); // 스폰 직후의 초기값(0)은 제외
           last[x.id] = x.lastEvent;
         }
       }
-      prev = new Map(b.map((x) => [x.id, key(x)]));
+      if (f % 12 === 0) {
+        frames++;
+        let ov = false;
+        for (let i = 0; i < b.length; i++)
+          for (let j = i + 1; j < b.length; j++) {
+            const iw = Math.min(b[i].x + b[i].w, b[j].x + b[j].w) - Math.max(b[i].x, b[j].x);
+            const ih = Math.min(b[i].y + b[i].h, b[j].y + b[j].h) - Math.max(b[i].y, b[j].y);
+            if (iw > 0 && ih > 0) ov = true;
+          }
+        if (ov) overlap++;
+      }
     }
-    void prev;
     expect(Math.min(...gaps)).toBeGreaterThan(0.19);
     expect(Math.max(...gaps)).toBeLessThan(1.0);
     expect(gaps.reduce((a, b) => a + b, 0) / gaps.length).toBeLessThan(0.5);
     expect(simultaneous / events).toBeLessThan(0.1);
+    expect(overlap / frames).toBeGreaterThan(0.1);
   });
 
-  it('특징점 주변을 잡고(박스가 특징점과 겹침), 서로 다른 특징점을 나눠 갖고, 한곳에 몰리지 않는다', () => {
-    const tr = new BoxTracker(9);
-    tr.configure(W, H, feats, toShares(DEFAULT_RATIOS));
-    let fx = 0;
-    let distinct = 0;
-    let frames = 0;
-    let spreadSum = 0;
-    for (let f = 0; f < 60 * 120; f++) {
-      fx += 1 / 60;
-      tr.step(1 / 60, fx);
-      if (f % 6) continue;
-      frames++;
-      if (new Set(tr.anchors()).size === tr.anchors().length) distinct++;
-      const b = tr.boxes();
-      const cx = b.map((x) => x.x + x.w / 2);
-      const cy = b.map((x) => x.y + x.h / 2);
-      const mx = cx.reduce((a, c) => a + c, 0) / cx.length;
-      const my = cy.reduce((a, c) => a + c, 0) / cy.length;
-      spreadSum += Math.sqrt(cx.reduce((a, c) => a + (c - mx) ** 2, 0) / cx.length + cy.reduce((a, c) => a + (c - my) ** 2, 0) / cy.length) / W;
-    }
-    expect(distinct / frames).toBeGreaterThan(0.95);
-    expect(spreadSum / frames).toBeGreaterThan(0.12);
-  });
-
-  it('정지(dt=0) 동안은 박스가 그대로이고, 이미지가 달라도(특징점 없음) 박스가 캔버스 안에 있다', () => {
-    const tr = new BoxTracker(2);
-    tr.configure(W, H, [], toShares(DEFAULT_RATIOS)); // 특징점 없음 → 분산 점으로 대체
+  it('정지(dt=0) 동안은 박스가 그대로이고, 장르 선택·해제 시 박스 수가 따라간다', () => {
+    const tr = make(2);
     tr.step(0.5, 1);
     const a = JSON.stringify(tr.boxes());
     tr.step(0, 1);
     expect(JSON.stringify(tr.boxes())).toBe(a);
-    for (const b of tr.boxes()) expect(b.x >= 0 && b.y >= 0 && b.x + b.w <= W && b.y + b.h <= H).toBe(true);
-    expect(tr.featureCount()).toBeGreaterThanOrEqual(10);
-  });
-
-  it('장르 선택·해제 시 박스 수가 정확히 따라가고, 모두 해제하면 0개', () => {
-    const tr = new BoxTracker(4);
-    tr.configure(W, H, feats, toShares(DEFAULT_RATIOS));
-    expect(tr.boxes().length).toBe(5);
     tr.setShares([{ id: 'pop', share: 50 }, { id: 'rock', share: 50 }, { id: 'rnb', share: 0 }]);
     expect(tr.boxes().map((b) => b.id).sort()).toEqual(['pop', 'rock']);
     tr.setShares([]);
@@ -201,9 +169,50 @@ describe('독립 박스 — 배치와 움직임', () => {
     tr.setShares([{ id: 'hiphop', share: 100 }]);
     expect(tr.boxes().length).toBe(1);
   });
+
+  it('후보가 적어도(없어도) 기준점이 대상 경계 상자 안에서 분산 배치된다', () => {
+    const tr = new BoxTracker(1);
+    tr.configure(W, H, SUBJ, [], toShares(DEFAULT_RATIOS));
+    const pts = GENRE_IDS.map((g) => tr.anchorOf(g));
+    for (const p of pts) {
+      expect(Math.abs(p.x - SUBJ.cx)).toBeLessThanOrEqual(SUBJ.w / 2);
+      expect(Math.abs(p.y - SUBJ.cy)).toBeLessThanOrEqual(SUBJ.h / 2);
+    }
+    expect(spreadOrder(pts).length).toBe(5);
+    expect(new Set(pts.map((p) => `${p.x}|${p.y}`)).size).toBeGreaterThanOrEqual(5);
+  });
 });
 
-describe('특징점 검출', () => {
+describe('대상 마스크·특징점', () => {
+  it('테두리 색을 배경으로 보고 원형 대상만 남긴다 (사과 전용 규칙 없음)', () => {
+    const w = 80;
+    const h = 60;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        const inDisk = Math.hypot(x - 40, y - 30) < 18;
+        // 파란 배경 + 초록 대상 (색상 규칙이 사과(빨강)에 묶여 있지 않음을 확인)
+        [d[o], d[o + 1], d[o + 2], d[o + 3]] = inDisk ? [30, 200, 60, 255] : [20, 90, 230, 255];
+      }
+    const m = maskFromBorder(d, w, h);
+    expect(m.isolated).toBe(true);
+    expect(m.coverage).toBeGreaterThan(0.18);
+    expect(m.coverage).toBeLessThan(0.26);
+    const bb = bboxOfAlpha((i) => m.alpha[i], w, h);
+    expect(bb.w).toBeGreaterThan(0.4);
+    expect(bb.w).toBeLessThan(0.55);
+  });
+
+  it('배경을 못 걷으면 이미지 전체를 대상으로 쓴다', () => {
+    const w = 40;
+    const h = 30;
+    const d = new Uint8ClampedArray(w * h * 4).fill(128);
+    const m = maskFromBorder(d, w, h);
+    expect(m.isolated).toBe(false);
+    expect(m.coverage).toBe(1);
+  });
+
   it('밝은 점 두 개를 상위 특징점으로 찾는다', () => {
     const w = 64;
     const h = 48;

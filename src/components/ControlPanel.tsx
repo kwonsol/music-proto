@@ -9,6 +9,8 @@ interface Props {
   freq: number;
   playing: boolean;
   showBoxes: boolean;
+  mode: 'pattern' | 'photo';
+  onMode: (m: 'pattern' | 'photo') => void;
   onUpload: (file: File) => void;
   onSample: () => void;
   onToggle: (id: GenreId) => void;
@@ -48,6 +50,15 @@ export function ControlPanel(p: Props) {
         </button>
         <button className="btn" onClick={() => p.onPlaying(!p.playing)} aria-pressed={!p.playing}>
           {p.playing ? '일시정지' : '재생'}
+        </button>
+      </div>
+
+      <div className="seg" role="group" aria-label="표현 방식">
+        <button className={p.mode === 'photo' ? 'on' : ''} onClick={() => p.onMode('photo')} aria-pressed={p.mode === 'photo'}>
+          사진
+        </button>
+        <button className={p.mode === 'pattern' ? 'on' : ''} onClick={() => p.onMode('pattern')} aria-pressed={p.mode === 'pattern'}>
+          패턴
         </button>
       </div>
 

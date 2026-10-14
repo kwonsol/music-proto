@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { GENRE_IDS, type GenreId } from '../lib/genres';
 import type { Ratios } from '../lib/ratios';
-import { AREA_BUDGET, BoxTracker, boxAreas, type Box, type GenreShare } from '../layout/boxes';
+import { AREA_REL, BoxTracker, boxAreas, type Box, type GenreShare } from '../layout/boxes';
 import type { Point } from '../layout/features';
-import { drawFrame, prepareSource } from '../render/renderer';
+import { drawFrame } from '../render/renderer';
+import { buildSubject, type Subject } from '../subject/art';
+import type { BBox } from '../subject/mask';
 import { clipSelfTest } from '../render/selftest';
 
 export const LOGICAL_W = 1600;
@@ -16,6 +18,10 @@ export interface LoadedImage {
   height: number;
   /** 정규화(0..1) 특징점 — 박스가 탐지·추적하는 대상 후보 */
   features: Point[];
+  /** 대상 실루엣 알파 마스크(이미지와 같은 좌표계) */
+  mask: CanvasImageSource;
+  /** 마스크의 정규화 경계 상자 */
+  maskBBox: BBox;
 }
 
 interface Props {
@@ -28,23 +34,15 @@ interface Props {
   freq: number;
   playing: boolean;
   showBoxes: boolean;
+  mode: 'pattern' | 'photo';
   resetToken: number;
   children?: React.ReactNode;
-}
-
-/** 이미지 정규화 좌표 -> 캔버스 논리 좌표 (원본이 캔버스를 cover 로 채우는 방식과 동일) */
-function mapFeatures(img: LoadedImage | null, W: number, H: number): Point[] {
-  if (!img) return [];
-  const s = Math.max(W / img.width, H / img.height);
-  const ox = (W - img.width * s) / 2;
-  const oy = (H - img.height * s) / 2;
-  return img.features.map((p) => ({ x: ox + p.x * img.width * s, y: oy + p.y * img.height * s, weight: p.weight }));
 }
 
 export function Stage(props: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const srcRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
+  const subjectRef = useRef<Subject | null>(null);
   const propsRef = useRef(props);
   propsRef.current = props;
   const dirty = useRef(true);
@@ -74,13 +72,14 @@ export function Stage(props: Props) {
   const pxW = Math.max(2, Math.round(fitW * scale));
   const pxH = Math.max(2, Math.round(fitH * scale));
 
-  // 원본을 캔버스 해상도로 한 번만 준비 (모든 박스가 같은 좌표계의 이 한 장을 공유)
+  // 대상을 캔버스 중앙에 고정 배치하고 마스크·아트 격자를 만든다 (박스는 이 위에서만 움직인다)
   useEffect(() => {
     const cv = canvasRef.current!;
     cv.width = pxW;
     cv.height = pxH;
     const img = props.image;
-    prepareSource(srcRef.current, img?.source ?? null, img?.width ?? 0, img?.height ?? 0, pxW, pxH);
+    subjectRef.current = img ? buildSubject(img, pxW, pxH) : null;
+    rt.current.cfgKey = '';
     dirty.current = true;
   }, [props.image, pxW, pxH]);
 
@@ -104,7 +103,8 @@ export function Stage(props: Props) {
       const p = propsRef.current;
       const s = rt.current;
       const cv = canvasRef.current;
-      if (!cv || cv.width < 2) return;
+      const subject = subjectRef.current;
+      if (!cv || cv.width < 2 || !subject) return;
 
       const logicalH = LOGICAL_W / p.aspect;
       const shares: GenreShare[] = GENRE_IDS.filter((g) => (p.ratios[g] ?? 0) > 1e-9).map((g) => ({
@@ -113,11 +113,38 @@ export function Stage(props: Props) {
       }));
       const tracker = trackerRef.current;
       // 이미지·캔버스 비율이 바뀌면 박스를 새로 잡고, 비율만 바뀌면 박스 면적만 갱신한다
-      const cfgKey = `${p.aspect}|${p.image?.width}x${p.image?.height}|${p.image?.features.length}`;
+      const cfgKey = `${p.aspect}|${cv.width}x${cv.height}|${subject.src.dataset.v}`;
       if (cfgKey !== s.cfgKey) {
         s.cfgKey = cfgKey;
         s.ratiosRef = p.ratios;
-        tracker.configure(LOGICAL_W, logicalH, mapFeatures(p.image, LOGICAL_W, logicalH), shares);
+        const k = LOGICAL_W / cv.width; // 캔버스 픽셀 -> 논리 좌표
+        const bb = subject.bbox;
+        // 기준점 후보: 실루엣 안쪽(외곽에서 4셀 이상)에 있는 특징점만 — 박스가 빈 곳을 잡지 않도록
+        const art = subject.art;
+        const cands: Point[] = [];
+        for (const f of p.image?.features ?? []) {
+          const m = subject.map(f.x, f.y);
+          const ci = Math.floor(m.x / art.cell);
+          const cj = Math.floor(m.y / art.cell);
+          if (ci < 0 || cj < 0 || ci >= art.cols || cj >= art.rows) continue;
+          if (art.depth[cj * art.cols + ci] >= 4) cands.push({ x: m.x * k, y: m.y * k, weight: f.weight });
+        }
+        // 부족하면 경계 상자 안의 균등 지점 중 실루엣 안쪽인 곳으로 보충
+        for (const [fx, fy] of [[0.5, 0.5], [0.33, 0.4], [0.67, 0.4], [0.36, 0.68], [0.64, 0.68], [0.5, 0.3], [0.5, 0.78], [0.3, 0.55], [0.7, 0.55]]) {
+          if (cands.length >= 8) break;
+          const x = bb.x + fx * bb.w;
+          const y = bb.y + fy * bb.h;
+          const ci = Math.floor(x / art.cell);
+          const cj = Math.floor(y / art.cell);
+          if (art.depth[cj * art.cols + ci] >= 4) cands.push({ x: x * k, y: y * k, weight: 0.6 });
+        }
+        tracker.configure(
+          LOGICAL_W,
+          logicalH,
+          { cx: (bb.x + bb.w / 2) * k, cy: (bb.y + bb.h / 2) * k, w: bb.w * k, h: bb.h * k },
+          cands,
+          shares,
+        );
         dirty.current = true;
       } else if (s.ratiosRef !== p.ratios) {
         s.ratiosRef = p.ratios;
@@ -142,7 +169,8 @@ export function Stage(props: Props) {
       if (p.playing) for (const b of boxes) if (s.fx - b.lastEvent < BLINK_SEC && b.lastEvent > 0) blink.add(b.id);
       drawFrame({
         ctx: cv.getContext('2d')!,
-        src: srcRef.current,
+        subject,
+        mode: p.mode,
         logicalW: LOGICAL_W,
         logicalH,
         boxes,
@@ -163,7 +191,9 @@ export function Stage(props: Props) {
     (window as unknown as Record<string, unknown>).__musicProto = {
       audit() {
         const s = rt.current;
-        const total = LOGICAL_W * s.logicalH;
+        const sub = subjectRef.current;
+        const kk = LOGICAL_W / (canvasRef.current?.width || LOGICAL_W);
+        const subjArea = sub ? sub.bbox.w * kk * sub.bbox.h * kk : 1;
         const areas = boxAreas(s.boxes);
         const sum = s.boxes.reduce((a, b) => a + b.w * b.h, 0);
         const pct: Record<string, number> = {};
@@ -183,8 +213,8 @@ export function Stage(props: Props) {
         return {
           count: s.boxes.length,
           pct,
-          budget: sum / total,
-          expectedBudget: AREA_BUDGET,
+          budget: sum / subjArea,
+          expectedBudget: AREA_REL,
           whiteFraction: 1 - covered / (N * N),
           inside,
           fx: s.fx,
@@ -192,6 +222,31 @@ export function Stage(props: Props) {
         };
       },
       clipSelfTest,
+      /** 박스·테두리를 끈 상태에서: 실루엣(계단 외곽) 밖에 흰색이 아닌 픽셀이 있는지, 대상 경계 상자 */
+      leakCheck() {
+        const cv = canvasRef.current;
+        const sub = subjectRef.current;
+        if (!cv || !sub) return null;
+        const d = cv.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, cv.width, cv.height).data;
+        const a = sub.art;
+        let leak = 0;
+        let inside = 0;
+        let nonWhiteInside = 0;
+        for (let y = 0; y < cv.height; y++)
+          for (let x = 0; x < cv.width; x++) {
+            const o = (y * cv.width + x) * 4;
+            const white = d[o] > 250 && d[o + 1] > 250 && d[o + 2] > 250;
+            const ci = Math.floor(x / a.cell);
+            const cj = Math.floor(y / a.cell);
+            const ins = a.inside[cj * a.cols + ci] === 1;
+            if (!ins && !white) leak++;
+            if (ins) {
+              inside++;
+              if (!white) nonWhiteInside++;
+            }
+          }
+        return { leak, insidePx: inside, nonWhiteInside, bbox: sub.bbox };
+      },
     };
   }, []);
 

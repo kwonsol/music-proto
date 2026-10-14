@@ -1,12 +1,16 @@
 import { EFFECTS, type PxRect } from '../effects';
 import { GENRE_LABEL, type GenreId } from '../lib/genres';
 import type { Box } from '../layout/boxes';
+import { PATTERNS } from '../pattern';
+import { BASE_LEVELS } from '../pattern/common';
+import type { Subject } from '../subject/art';
 
 export const BORDER_COLOR = '#39ff14';
 
 export interface FrameInput {
   ctx: CanvasRenderingContext2D;
-  src: HTMLCanvasElement;
+  subject: Subject;
+  mode: 'pattern' | 'photo';
   /** 논리 좌표계 크기 (레이아웃이 계산된 공간) */
   logicalW: number;
   logicalH: number;
@@ -45,6 +49,7 @@ export function drawRegion(
   time: number,
   intensity: number,
   option = 0,
+  mask?: HTMLCanvasElement,
 ) {
   if (rect.w < 1 || rect.h < 1) return;
   const cw = ctx.canvas.width;
@@ -64,12 +69,90 @@ export function drawRegion(
   g.rect(rect.x, rect.y, rect.w, rect.h);
   g.clip();
   EFFECTS[genre]({ ctx: g, src, rect, slot, time, intensity, option });
+  if (mask) {
+    // 효과의 실제 표시 영역 = 박스 ∩ 대상 실루엣: 마지막에 실루엣으로 다시 자른다
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(mask, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+  }
   g.restore();
   ctx.drawImage(scratch, rect.x, rect.y, rect.w, rect.h, rect.x, rect.y, rect.w, rect.h);
 }
 
+// 패턴 모드용 저해상도 레이어(셀당 1픽셀)
+let baseLow: { key: string; canvas: HTMLCanvasElement } | null = null;
+let layer: { cols: number; rows: number; canvas: HTMLCanvasElement; img: ImageData; u32: Uint32Array } | null = null;
+
+function drawBase(ctx: CanvasRenderingContext2D, f: FrameInput) {
+  const { art } = f.subject;
+  const key = `${f.subject.src.dataset.v}|${art.cols}x${art.rows}`;
+  if (!baseLow || baseLow.key !== key) {
+    const c = document.createElement('canvas');
+    c.width = art.cols;
+    c.height = art.rows;
+    const g = c.getContext('2d')!;
+    const im = g.createImageData(art.cols, art.rows);
+    const u32 = new Uint32Array(im.data.buffer);
+    for (let i = 0; i < art.cols * art.rows; i++) {
+      if (!art.inside[i]) continue;
+      const rgb = BASE_LEVELS[art.level[i]];
+      u32[i] = 0xff000000 | ((rgb & 0xff) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 0xff); // ABGR
+    }
+    g.putImageData(im, 0, 0);
+    baseLow = { key, canvas: c };
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(baseLow.canvas, 0, 0, art.cols, art.rows, 0, 0, art.cols * art.cell, art.rows * art.cell);
+  ctx.imageSmoothingEnabled = true;
+}
+
+function drawPatternBox(ctx: CanvasRenderingContext2D, f: FrameInput, b: Box, p: PxRect) {
+  const { art } = f.subject;
+  if (!layer || layer.cols !== art.cols || layer.rows !== art.rows) {
+    const c = document.createElement('canvas');
+    c.width = art.cols;
+    c.height = art.rows;
+    const img = c.getContext('2d')!.createImageData(art.cols, art.rows);
+    layer = { cols: art.cols, rows: art.rows, canvas: c, img, u32: new Uint32Array(img.data.buffer) };
+  }
+  const cell = art.cell;
+  const i0 = Math.max(0, Math.floor(p.x / cell));
+  const j0 = Math.max(0, Math.floor(p.y / cell));
+  const i1 = Math.min(art.cols - 1, Math.floor((p.x + p.w - 1) / cell));
+  const j1 = Math.min(art.rows - 1, Math.floor((p.y + p.h - 1) / cell));
+  if (i1 < i0 || j1 < j0) return;
+  const { u32 } = layer;
+  for (let j = j0; j <= j1; j++) u32.fill(0, j * art.cols + i0, j * art.cols + i1 + 1);
+  const put = (i: number, j: number, rgb: number) => {
+    u32[j * art.cols + i] = 0xff000000 | ((rgb & 0xff) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 0xff);
+  };
+  PATTERNS[b.genre]({
+    grid: art,
+    i0,
+    i1,
+    j0,
+    j1,
+    box: { x: p.x / cell, y: p.y / cell, w: p.w / cell, h: p.h / cell },
+    time: f.fxTime,
+    I: f.intensity[b.genre],
+    option: f.options[b.genre],
+    put,
+  });
+  const lg = layer.canvas.getContext('2d')!;
+  lg.putImageData(layer.img, 0, 0, i0, j0, i1 - i0 + 1, j1 - j0 + 1);
+  // 박스 영역(정수 픽셀)으로 정확히 잘라서 표시 = 박스 ∩ 실루엣(셀 단위 계단 외곽)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(p.x, p.y, p.w, p.h);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(layer.canvas, i0, j0, i1 - i0 + 1, j1 - j0 + 1, i0 * cell, j0 * cell, (i1 - i0 + 1) * cell, (j1 - j0 + 1) * cell);
+  ctx.restore();
+}
+
 export function drawFrame(f: FrameInput) {
-  const { ctx, src } = f;
+  const { ctx } = f;
+  const { src } = f.subject;
   const cw = src.width;
   const ch = src.height;
   const sx = cw / f.logicalW;
@@ -77,14 +160,19 @@ export function drawFrame(f: FrameInput) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
 
-  // 배경은 실제 흰색. 사진은 각 박스 안에서만 그려진다 (박스 밖·박스 사이는 흰 여백)
+  // 배경은 실제 흰색. 대상은 항상 같은 자리에 그려지고, 박스 밖의 대상도 기본 그래픽으로 남는다
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, cw, ch);
+  if (f.mode === 'pattern') drawBase(ctx, f);
+  else ctx.drawImage(f.subject.cut, 0, 0);
   if (f.boxes.length === 0) return;
 
   const px = f.boxes.map((b) => toPx(b, sx, sy));
-  // 배열 뒤쪽이 위. 각 박스는 자기 영역을 통째로 덮어쓰므로 겹친 곳은 맨 위 박스의 효과만 보인다 (중첩 적용 없음)
-  f.boxes.forEach((b, i) => drawRegion(ctx, src, px[i], b.genre, 0, f.fxTime, f.intensity[b.genre], f.options[b.genre]));
+  // 배열 뒤쪽이 위. 겹친 곳은 맨 위 박스의 효과만 보인다 (중첩 적용 없음)
+  f.boxes.forEach((b, i) => {
+    if (f.mode === 'pattern') drawPatternBox(ctx, f, b, px[i]);
+    else drawRegion(ctx, src, px[i], b.genre, 0, f.fxTime, f.intensity[b.genre], f.options[b.genre], f.subject.mask);
+  });
 
   if (!f.showBoxes) return;
   const u = Math.max(1, Math.min(cw, ch) / 800); // 화면 크기에 따라 선·글자 크기 보정

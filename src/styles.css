@@ -54,3 +54,7 @@ input[type=range] { width: 100%; accent-color: var(--neon); margin: 0; }
   .panel { border-left: 0; border-top: 1px solid var(--line); }
   .main { padding: 10px; }
 }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #323847; border-radius: 6px; overflow: hidden; }
+.seg button { background: #1a1d25; color: var(--muted); border: 0; padding: 6px 0; cursor: pointer; font: inherit; }
+.seg button.on { background: #1f3a18; color: var(--text); }
