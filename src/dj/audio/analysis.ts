@@ -275,16 +275,47 @@ export function estimateTempo(onset: OnsetData, opts: TempoOptions = {}): TempoE
     .filter((e) => Math.abs(e) < 0.03)
     .sort((a, b) => a - b);
   if (errs.length >= 4) firstBeat += errs[Math.floor(errs.length / 2)];
-  let firstDownbeat = firstBeat + down * beatSec;
-  while (firstDownbeat - 4 * beatSec >= -0.02) firstDownbeat -= 4 * beatSec;
+
+  // 4) 강한 타격들을 16분 격자 번호에 대응시켜 최소제곱 직선(t = a + n·q)으로 BPM·첫 박을 다듬는다.
+  //    탐색 간격(0.05 BPM)과 프레임 크기(샘플레이트마다 다름)에 덜 묶여, 반복 구간 끝에서도 박이 밀리지 않게.
+  let fitBpm = main.bpm;
+  const strong = pickOnsets(onset).filter((o) => o.strength > 0.3);
+  for (let iter = 0; iter < 4; iter++) {
+    const q = 60 / fitBpm / 4;
+    const pts = strong
+      .map((o) => ({ n: Math.round((o.time - firstBeat) / q), t: o.time }))
+      // 반복할수록 허용 오차를 좁혀 격자에서 벗어난 필인·끝부분 타격을 제외
+      .filter((p) => Math.abs(p.t - (firstBeat + p.n * q)) < [0.03, 0.015, 0.012, 0.012][iter]);
+    if (pts.length < 8) break;
+    const mn = pts.reduce((s, p) => s + p.n, 0) / pts.length;
+    const mt = pts.reduce((s, p) => s + p.t, 0) / pts.length;
+    let num = 0;
+    let den = 0;
+    for (const p of pts) {
+      num += (p.n - mn) * (p.t - mt);
+      den += (p.n - mn) ** 2;
+    }
+    const qFit = den > 0 ? num / den : q;
+    // ±1% 안에서만 다듬는다 (반박·두 배 판단은 앞 단계 결과 유지)
+    if (Math.abs(qFit - q) / q > 0.01) break;
+    fitBpm = 60 / qFit / 4;
+    firstBeat = mt - mn * qFit;
+  }
+  const beat = 60 / fitBpm;
+  firstBeat = ((firstBeat % beat) + beat) % beat;
+  void beatSec;
+
+  let firstDownbeat = firstBeat + down * beat;
+  while (firstDownbeat - 4 * beat >= -0.02) firstDownbeat -= 4 * beat;
+  while (firstDownbeat < -0.02) firstDownbeat += 4 * beat;
 
   const alternatives: TempoCandidate[] = cands.map((c) => ({ bpm: Math.round(c.bpm * 100) / 100, score: c.score }));
   const mainW = main.score * prior(main.bpm);
   const ambiguous = cands.slice(1).some((c) => c.score * prior(c.bpm) > mainW * 0.9);
 
   return {
-    bpm: Math.round(main.bpm * 100) / 100,
-    firstBeat: Math.max(0, firstBeat % beatSec),
+    bpm: Math.round(fitBpm * 1000) / 1000,
+    firstBeat,
     firstDownbeat: Math.max(0, firstDownbeat),
     confidence,
     alternatives,
