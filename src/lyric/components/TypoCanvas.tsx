@@ -12,9 +12,11 @@ interface Props {
   clockToken: number;
   onFonts: (fi: FontInfo) => void;
   onDemoLine: (index: number) => void;
+  /** 링 모드에서 원을 클릭했을 때 */
+  onRingClick: (index: number) => void;
 }
 
-export function TypoCanvas({ scene, playing, clock, clockToken, onFonts, onDemoLine }: Props) {
+export function TypoCanvas({ scene, playing, clock, clockToken, onFonts, onDemoLine, onRingClick }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hudRef = useRef<HTMLDivElement>(null);
@@ -24,8 +26,8 @@ export function TypoCanvas({ scene, playing, clock, clockToken, onFonts, onDemoL
   const rendererRef = useRef<SceneRenderer | null>(null);
   const dirty = useRef(true);
   const lineRef = useRef(-1);
-  const cbRef = useRef({ onFonts, onDemoLine });
-  cbRef.current = { onFonts, onDemoLine };
+  const cbRef = useRef({ onFonts, onDemoLine, onRingClick });
+  cbRef.current = { onFonts, onDemoLine, onRingClick };
   const [ready, setReady] = useState(false);
 
   sceneRef.current = scene;
@@ -35,7 +37,7 @@ export function TypoCanvas({ scene, playing, clock, clockToken, onFonts, onDemoL
   }, [scene, playing, clockToken]);
 
   // 폰트(필요한 한글 서브셋 포함)를 받은 뒤에만 측정·래스터화한다.
-  const textKey = scene.input + '|' + scene.lyrics.map((l) => l.text).join('|');
+  const textKey = scene.input + '|' + scene.lyrics.map((l) => l.text).join('|') + '|' + scene.ring.lines.map((l) => l.text).join('|');
   useEffect(() => {
     let alive = true;
     loadFonts(textKey).then((fi) => {
@@ -77,6 +79,7 @@ export function TypoCanvas({ scene, playing, clock, clockToken, onFonts, onDemoL
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       const s = sceneRef.current;
+      clock.current.dt = playingRef.current ? dt : 0;
       if (playingRef.current) {
         clock.current.time += dt;
         clock.current.fx += dt * s.params.speed;
@@ -123,7 +126,18 @@ export function TypoCanvas({ scene, playing, clock, clockToken, onFonts, onDemoL
 
   return (
     <div className="typo-wrap" ref={wrapRef}>
-      <canvas ref={canvasRef} />
+      <canvas
+        ref={canvasRef}
+        className={scene.mode === 'ring' ? 'pickable' : undefined}
+        onClick={(e) => {
+          if (sceneRef.current.mode !== 'ring' || !rendererRef.current) return;
+          const c = canvasRef.current!;
+          const rect = c.getBoundingClientRect();
+          const k = c.width / rect.width;
+          const i = rendererRef.current.ring.hit((e.clientX - rect.left) * k, (e.clientY - rect.top) * k);
+          if (i >= 0) cbRef.current.onRingClick(i);
+        }}
+      />
       {!ready && <div className="typo-loading">폰트 불러오는 중…</div>}
       {scene.compare && (
         <>

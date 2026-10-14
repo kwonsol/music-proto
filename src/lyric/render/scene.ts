@@ -5,8 +5,10 @@ import type { DirectionPreset, SemanticTag } from '../data/presets';
 import type { FontInfo } from './fonts';
 import { advanceOf, BASE, GlyphCache } from './glyphs';
 import { stepFor } from '../effects/slicer';
+import type { RingLine, RingView } from '../data/rings';
+import { RingScene } from './ring';
 
-export type Mode = 'single' | 'repeat' | 'demo';
+export type Mode = 'ring' | 'single' | 'repeat' | 'demo';
 export type Theme = 'white' | 'yellow';
 
 export const THEME_BG: Record<Theme, string> = { white: '#ffffff', yellow: '#ffe500' };
@@ -21,6 +23,8 @@ export interface SceneState {
   theme: Theme;
   presets: Record<SemanticTag, DirectionPreset>;
   lyrics: LyricLine[];
+  /** 링 편집 모드: 줄마다 독립 설정 (선택된 줄은 미리보기 값이 들어온다) */
+  ring: { lines: RingLine[]; selected: number; view: RingView };
 }
 
 export interface Clock {
@@ -28,6 +32,10 @@ export interface Clock {
   time: number;
   /** 속도가 반영된 효과 시간(초). 속도를 바꿔도 끊기지 않도록 누적 */
   fx: number;
+  /** 이번 프레임의 경과 시간(초). 일시정지 중에는 0 */
+  dt: number;
+  /** '처음부터' 를 누를 때마다 증가 → 링 공전·줄별 효과 시간 초기화 */
+  epoch: number;
 }
 
 interface Style {
@@ -36,6 +44,8 @@ interface Style {
   index: number;
   count: number;
 }
+
+export type StripItem = Item;
 
 interface Item {
   ch: string;
@@ -64,8 +74,20 @@ export class SceneRenderer {
   /** 줄바꿈 결과는 글자 인덱스로만 저장 (효과 파라미터가 바뀌어도 재사용) */
   private layoutMemo = new Map<string, { size: number; lines: number[][] }>();
 
+  ring: RingScene;
+
   constructor(private fi: FontInfo) {
     this.cache = new GlyphCache(fi);
+    this.ring = new RingScene(this, fi);
+  }
+
+  setLoad(n: number) {
+    this.load = Math.max(1, n);
+  }
+
+  /** 링 텍스처용: 한 줄을 왼쪽 정렬로 그리고 실제 폭을 돌려준다 */
+  drawStripLine(ctx: CanvasRenderingContext2D, items: Item[], size: number, ax: number, baseline: number, fx: number, distort: boolean, instance: number, radius: number, room: number) {
+    return this.drawLine(ctx, items, size, ax, baseline, 'left', { kind: 'loop', fx, offset: 0 }, distort, instance, room, -Infinity, Infinity, radius);
   }
 
   render(ctx: CanvasRenderingContext2D, W: number, H: number, s: SceneState, clock: Clock) {
@@ -85,13 +107,15 @@ export class SceneRenderer {
         ]
       : [{ rect: { x: 0, y: 0, w: W, h: usable }, distort: true }];
 
+    if (s.mode === 'ring') this.ring.advance(s.ring.lines, s.ring.view, clock.dt, clock.epoch);
     for (const { rect, distort } of halves) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(rect.x, rect.y, rect.w, rect.h);
       ctx.clip();
       this.load = 1;
-      if (s.mode === 'repeat') this.drawRepeat(ctx, rect, s, clock, distort);
+      if (s.mode === 'ring') this.ring.draw(ctx, rect, s.ring.lines, s.ring.view, s.ring.selected, distort, ringItems);
+      else if (s.mode === 'repeat') this.drawRepeat(ctx, rect, s, clock, distort);
       else if (s.mode === 'single') this.drawSingle(ctx, rect, itemsFromInput(s), s.input, { kind: 'loop', fx: clock.fx, offset: 0 }, distort);
       else this.drawDemo(ctx, rect, s, clock, distort);
       ctx.restore();
@@ -116,6 +140,10 @@ export class SceneRenderer {
         speed: preset.speed,
         range: preset.range,
         direction: preset.direction,
+        tail: preset.tail,
+        origin: preset.origin,
+        sharp: preset.sharp,
+        spin: preset.spin,
       };
       speed = preset.speed;
       const count = em.end - em.start;
@@ -171,11 +199,12 @@ export class SceneRenderer {
     room: number,
     topBound: number,
     bottom: number,
-  ) {
+    radius = 0,
+  ): number {
     const glyphs = line.map((it) => this.cache.get(it.ch, size));
     const vfit = clamp((bottom - baseline) / (size * 1.5), 0.2, 1);
     const tfit = clamp((baseline - size * CAP - topBound) / (size * 0.8), 0.2, 1);
-    const states = line.map((it, i) => (distort && it.style ? stateFor(it, glyphs[i], timing, instance, i, vfit, tfit, stepFor(glyphs[i], this.load)) : null));
+    const states = line.map((it, i) => (distort && it.style ? stateFor(it, glyphs[i], timing, instance, i, vfit, tfit, stepFor(glyphs[i], this.load), radius > 0 ? radius : size * 3) : null));
     const extraOf = () => states.map((st) => (st && st.effect.extraAdvance ? st.effect.extraAdvance(st.frame) : 0));
     let extra = extraOf();
     const base = glyphs.reduce((a, g) => a + g.advance, 0);
@@ -200,6 +229,7 @@ export class SceneRenderer {
       }
       pen += adv[i];
     }
+    return total;
   }
 
   private fitLayout(items: Item[], rect: Rect, key: string) {
@@ -229,7 +259,7 @@ export class SceneRenderer {
   }
 }
 
-function stateFor(it: Item, g: ReturnType<GlyphCache['get']>, timing: Timing, instance: number, pos: number, vfit: number, tfit: number, step: number) {
+function stateFor(it: Item, g: ReturnType<GlyphCache['get']>, timing: Timing, instance: number, pos: number, vfit: number, tfit: number, step: number, radius: number) {
   const st = it.style!;
   const { effect, params, index, count } = st;
   let phase: number;
@@ -247,7 +277,18 @@ function stateFor(it: Item, g: ReturnType<GlyphCache['get']>, timing: Timing, in
     t = timing.t;
   }
   const seed = instance * 7919 + (pos + 1) * 131 + it.ch.charCodeAt(0);
-  return { effect, frame: { g, phase, cycle, t, p: params, seed, index, count, fit: 1, vfit, tfit, step } };
+  return { effect, frame: { g, phase, cycle, t, p: params, seed, index, count, fit: 1, vfit, tfit, step, radius } };
+}
+
+/** 링 한 줄 → 글자 목록. [대괄호] 구간에만 그 줄의 효과를 건다 */
+function ringItems(l: RingLine): Item[] {
+  const { text, ranges } = parseMarked(l.text);
+  const effect = EFFECTS[l.effect];
+  const items: Item[] = [...text].filter((ch) => ch !== '\n').map((ch) => ({ ch, style: null }));
+  for (const [a, b] of ranges) {
+    for (let i = a; i < b && i < items.length; i++) items[i].style = { effect, params: l.params, index: i - a, count: b - a };
+  }
+  return items;
 }
 
 function itemsFromInput(s: SceneState): Item[] {

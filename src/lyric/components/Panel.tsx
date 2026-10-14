@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { EFFECTS, EFFECT_IDS, type Direction, type EffectId, type EffectParams } from '../effects';
+import { EFFECTS, EFFECT_IDS, type EffectId, type EffectParams } from '../effects';
+import { EffectControls, EffectGrid } from './Controls';
 import { EXAMPLES } from '../data/examples';
 import type { LyricLine } from '../data/lyrics';
 import { SEMANTIC_TAGS, type DirectionPreset, type SemanticTag } from '../data/presets';
@@ -29,9 +30,12 @@ interface Props {
   onPreset: (tag: SemanticTag, p: Partial<DirectionPreset>) => void;
   onResetPresets: () => void;
   onSeek: (time: number) => void;
+  /** 링 편집 모드 패널 */
+  ringPanel: ReactNode;
 }
 
 const MODES: [Mode, string][] = [
+  ['ring', '링 편집'],
   ['single', '크게 보기'],
   ['repeat', '반복 배열'],
   ['demo', '가사 데모'],
@@ -39,6 +43,7 @@ const MODES: [Mode, string][] = [
 
 export function Panel(p: Props) {
   const demo = p.mode === 'demo';
+  const flat = p.mode === 'single' || p.mode === 'repeat';
   return (
     <aside className="lp-panel">
       <header className="lp-head">
@@ -79,7 +84,9 @@ export function Panel(p: Props) {
         </div>
       </section>
 
-      {!demo && (
+      {p.mode === 'ring' && p.ringPanel}
+
+      {flat && (
         <>
           <section>
             <h3>
@@ -101,24 +108,12 @@ export function Panel(p: Props) {
 
           <section>
             <h3>효과</h3>
-            <div className="effects">
-              {EFFECT_IDS.map((id, i) => (
-                <button key={id} className={p.effect === id ? 'fx on' : 'fx'} onClick={() => p.onEffect(id)}>
-                  <b>
-                    {'①②③④⑤⑥⑦'[i]} {EFFECTS[id].label}
-                  </b>
-                  <span>{EFFECTS[id].mood}</span>
-                </button>
-              ))}
-            </div>
+            <EffectGrid value={p.effect} onChange={p.onEffect} />
           </section>
 
           <section>
             <h3>조절</h3>
-            <Slider label="강도" value={p.params.intensity} min={0} max={1} step={0.01} onChange={(v) => p.onParams({ intensity: v })} />
-            <Slider label="속도" value={p.params.speed} min={0.2} max={3} step={0.05} fmt={(v) => `×${v.toFixed(2)}`} onChange={(v) => p.onParams({ speed: v })} />
-            <Slider label="변형 범위" value={p.params.range} min={0} max={1} step={0.01} onChange={(v) => p.onParams({ range: v })} />
-            <DirectionSeg value={p.params.direction} onChange={(d) => p.onParams({ direction: d })} />
+            <EffectControls effect={p.effect} params={p.params} onChange={p.onParams} />
           </section>
         </>
       )}
@@ -191,32 +186,4 @@ function highlight(l: LyricLine) {
   }
   out.push(l.text.slice(pos));
   return <span className="ltext">{out}</span>;
-}
-
-function Slider(props: { label: string; value: number; min: number; max: number; step: number; fmt?: (v: number) => string; onChange: (v: number) => void }) {
-  return (
-    <label className="slider">
-      <span>
-        {props.label}
-        <output>{props.fmt ? props.fmt(props.value) : Math.round(props.value * 100)}</output>
-      </span>
-      <input type="range" min={props.min} max={props.max} step={props.step} value={props.value} onChange={(e) => props.onChange(+e.target.value)} />
-    </label>
-  );
-}
-
-function DirectionSeg({ value, onChange }: { value: Direction; onChange: (d: Direction) => void }) {
-  return (
-    <div className="slider">
-      <span>방향</span>
-      <div className="seg small">
-        <button className={value === 'h' ? 'on' : ''} onClick={() => onChange('h')}>
-          ↔ 가로
-        </button>
-        <button className={value === 'v' ? 'on' : ''} onClick={() => onChange('v')}>
-          ↕ 세로
-        </button>
-      </div>
-    </div>
-  );
 }

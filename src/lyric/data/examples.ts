@@ -9,4 +9,6 @@ export const EXAMPLES: Record<EffectId, [string, string]> = {
   compress: ['숨이 자꾸 [막혀]', "I CAN'T [BREATHE]"],
   drip: ['기억이 [흘러내려]', '[MELTING] AWAY'],
   echo: ['[아직도] 네 이름을 불러', '[ECHOES] OF YOU'],
+  fluid: ['흐르는 [그리움]이 번져 가', '[LINGERING] TRACES'],
+  swirl: ['어지러운 밤이 [돌고 돌아]', '[SPINNING] AROUND'],
 };

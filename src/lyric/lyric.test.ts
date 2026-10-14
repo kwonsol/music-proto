@@ -29,7 +29,7 @@ describe('demo lyrics', () => {
   });
   it('모든 태그에 프리셋이 있다', () => {
     for (const l of DEMO_LYRICS) for (const e of l.emphasis) expect(SEMANTIC_TAGS).toContain(e.tag);
-    expect(Object.keys(DEFAULT_PRESETS).length).toBe(7);
+    expect(Object.keys(DEFAULT_PRESETS).length).toBe(9);
   });
   it('시간으로 현재 줄을 찾고 끝나면 처음으로 돌아간다', () => {
     expect(lineAt(DEMO_LYRICS, 0)?.index).toBe(0);
@@ -88,5 +88,27 @@ describe('determinism', () => {
     expect(hash(3, 4, 5)).toBe(hash(3, 4, 5));
     expect(noise1(1.234, 9)).toBe(noise1(1.234, 9));
     expect(hash(3, 4, 5)).not.toBe(hash(3, 4, 6));
+  });
+});
+
+describe('ring lines', async () => {
+  const { DEFAULT_RINGS } = await import('./data/rings');
+  const { defaultParams, controlsOf } = await import('./effects');
+  it('예시는 4줄 이상: 1줄 유체, 2줄 회전 잔상, 나머지는 기존 효과', () => {
+    expect(DEFAULT_RINGS.length).toBeGreaterThanOrEqual(4);
+    expect(DEFAULT_RINGS[0].effect).toBe('fluid');
+    expect(DEFAULT_RINGS[1].effect).toBe('swirl');
+    for (const l of DEFAULT_RINGS.slice(2)) expect(['stretch', 'wave', 'slice', 'jitter', 'compress', 'drip', 'echo']).toContain(l.effect);
+  });
+  it('줄마다 고유 ID 와 독립 설정을 가진다', () => {
+    expect(new Set(DEFAULT_RINGS.map((l) => l.id)).size).toBe(DEFAULT_RINGS.length);
+    expect(DEFAULT_RINGS[0].params).not.toBe(DEFAULT_RINGS[1].params);
+    expect(new Set(DEFAULT_RINGS.map((l) => l.effect)).size).toBe(DEFAULT_RINGS.length);
+  });
+  it('새 효과는 전용 조절 항목과 기본값을 가진다', () => {
+    expect(controlsOf('fluid').map((c) => c.key)).toEqual(['intensity', 'speed', 'range', 'tail', 'origin']);
+    expect(controlsOf('swirl').map((c) => c.key)).toEqual(['intensity', 'spin', 'tail', 'sharp', 'speed']);
+    expect(defaultParams('swirl').sharp).toBeDefined();
+    expect(controlsOf('stretch').map((c) => c.key)).toEqual(['intensity', 'speed', 'range', 'direction']);
   });
 });

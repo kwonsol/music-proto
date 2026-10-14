@@ -83,3 +83,23 @@ footer.note { margin-top: auto; }
   .lp-app { grid-template-columns: 1fr; grid-template-rows: 58vh auto; }
   .lp-panel { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* 링 편집 */
+.typo-wrap canvas.pickable { cursor: pointer; }
+.rings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rings li { display: flex; gap: 8px; padding: 6px; border-radius: 6px; cursor: pointer; }
+.rings li:hover { background: #1d2028; }
+.rings li.on { background: #f2f2f2; color: #000; }
+.rings li.on em, .rings li.on .time { color: #555; }
+.rings .time { color: var(--muted); font-variant-numeric: tabular-nums; width: 22px; flex: none; }
+.rings mark { background: var(--accent); color: #000; padding: 0 2px; }
+.rings em { display: block; font-style: normal; color: var(--muted); font-size: 11px; }
+.ring-edit { border: 1px solid #3a3f4c; border-radius: 8px; padding: 10px; }
+.ring-edit h3 { flex-wrap: wrap; gap: 6px; }
+.dirty { color: #ffb347; font-weight: 600; letter-spacing: 0; }
+.ring-text { font-size: 17px; font-weight: 700; line-height: 1.35; color: #fff; }
+.ring-text mark { background: var(--accent); color: #000; padding: 0 3px; }
+.ring-input { width: 100%; background: #0f1115; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font: inherit; font-size: 14px; }
+.row.nav .btn { flex: 1; }
+.btn:disabled, .chip:disabled { opacity: .4; cursor: default; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: 11px; }
