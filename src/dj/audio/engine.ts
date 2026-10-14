@@ -49,11 +49,12 @@ export class DjEngine {
   readonly loop: { start: number; end: number } | null;
   readonly bands: Bands;
 
-  private readonly noise: AudioBuffer;
+  /** 악보 드로잉 버전(src/score)에서도 같은 믹서·박 격자를 쓰기 위해 공개한다 */
+  readonly noise: AudioBuffer;
   private readonly songGain: GainNode;
   private readonly playGain: GainNode;
-  private readonly playBus: GainNode;
-  private readonly reverbSend: GainNode;
+  readonly playBus: GainNode;
+  readonly reverbSend: GainNode;
   private readonly analyser: AnalyserNode;
   private readonly meter: BandMeter;
   private readonly echoIn: GainNode;
@@ -67,9 +68,9 @@ export class DjEngine {
   private offset = 0;
   private _playing = false;
   /** 박 하나가 울리는 AudioContext 시각. 이 시각 ± k*spb 가 모두 박 */
-  private anchor = 0;
+  anchor = 0;
   /** 마디 첫 박이 울리는 AudioContext 시각 */
-  private downAnchor = 0;
+  downAnchor = 0;
 
   private jobs = new Map<string, RepeatJob>();
   private events: VisualEvent[] = [];
@@ -351,12 +352,12 @@ export class DjEngine {
   }
 
   /** 동시 발음 수 제한 */
-  private voiceBudget(): boolean {
+  voiceBudget(): boolean {
     this.voiceEnds = this.voiceEnds.filter((e) => e > this.ctx.currentTime);
     return this.voiceEnds.length < MIX.maxVoices;
   }
 
-  private track(v: Voice): Voice {
+  track(v: Voice): Voice {
     this.voiceEnds.push(v.end);
     return v;
   }

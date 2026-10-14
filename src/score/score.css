@@ -1,0 +1,275 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+body {
+  background: #ffffff;
+  color: #2b2c30;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Pretendard', 'Segoe UI', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 좌우 분리: 왼쪽 약 24% 음악 영역(밝은 회색), 오른쪽 약 76% 흰 캔버스. 카드·테두리·그림자 없이 배경색으로만 구분 */
+.score {
+  display: grid;
+  grid-template-columns: 24% 1fr;
+  height: 100%;
+}
+
+.score-music {
+  background: #d9d9d9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 24px 18px;
+  min-width: 0;
+}
+.score-cover {
+  width: 64%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover; /* 정사각형 커버, 원본 비율 고정 */
+  display: block;
+  pointer-events: none;
+}
+.score-cover.missing {
+  display: grid;
+  place-items: center;
+  background: #161414;
+  color: #aaa;
+}
+.score-play {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 0;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.score-play svg {
+  width: 26px;
+  height: 26px;
+  fill: #d0d0d0;
+}
+.score-play:not(:disabled) svg {
+  fill: #b9b9b9;
+}
+.score-play:hover:not(:disabled) svg {
+  fill: #8e8e8e;
+}
+.score-play:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.score-vols {
+  display: grid;
+  gap: 4px;
+  width: 64%;
+}
+.score-vols label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #6b6b6b;
+}
+.score-vols input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #555;
+}
+.score-tempo {
+  margin: 0;
+  font-size: 11px;
+  color: #7a7a7a;
+  text-align: center;
+}
+
+.score-area {
+  position: relative;
+  background: #ffffff;
+  min-width: 0;
+  overflow: hidden; /* 그래픽이 왼쪽 음악 영역으로 넘어가지 않게 */
+}
+.score-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* 상단 작은 모드 전환 */
+.score-modes {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: #f1f1f1;
+  border-radius: 999px;
+}
+.score-modes button {
+  font: inherit;
+  font-size: 12px;
+  border: 0;
+  background: none;
+  color: #777;
+  padding: 3px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.score-modes button.on {
+  background: #161414;
+  color: #fff;
+}
+
+.score-pending {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  gap: 6px;
+  color: #9a9a9a;
+  pointer-events: none;
+}
+.score-pending strong {
+  font-size: 18px;
+  color: #555;
+  font-weight: 600;
+}
+
+/* 작은 도구: 오른쪽 위 */
+.score-tools {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 10px;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 999px;
+}
+.score-tools button {
+  font: inherit;
+  font-size: 11px;
+  color: #555;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.score-tools button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 4마디 루프 진행 표시 */
+.score-loop {
+  --pos: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, 16px);
+  gap: 2px;
+  height: 6px;
+}
+.score-loop i {
+  background: #e3e3e3;
+}
+.score-loop b {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: #161414;
+  left: calc(var(--pos) * 70px);
+}
+
+/* 숫자키 안내: 아래쪽 작게 */
+.score-keys {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: #9a9a9a;
+  pointer-events: none;
+}
+.score-keys li.on {
+  color: #161414;
+  font-weight: 600;
+}
+.score-keys li.hint {
+  margin-left: auto;
+}
+.score-keys kbd {
+  font: inherit;
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  margin-right: 4px;
+  color: #666;
+}
+
+.score-badge {
+  position: fixed;
+  left: 0;
+  top: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #161414;
+  color: #fff;
+  font-size: 11px;
+  pointer-events: none;
+  opacity: 0;
+  white-space: nowrap;
+  transition: opacity 0.12s;
+}
+
+.score-errors {
+  position: fixed;
+  top: 48px;
+  left: 62%;
+  transform: translateX(-50%);
+  max-width: min(520px, 70vw);
+  background: #fbeaea;
+  border: 1px solid #e0a8a8;
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+.score-errors p {
+  margin: 2px 0;
+}
+
+/* 힙합 1번: 커서를 따라다니는 커버 미리보기 */
+.score-cover-preview {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
