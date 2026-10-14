@@ -110,14 +110,20 @@ export function RingPanel(p: Props) {
       </section>
 
       <section>
-        <h3>이 링의 회전</h3>
+        <h3>
+          이 링의 회전·기울기 <small>링별 고정값</small>
+        </h3>
         <Slider label="공전 속도" value={d.rotation.speed} min={0} max={24} step={0.5} fmt={(v) => `${v.toFixed(1)}°/s`} onChange={(v) => p.onDraft({ rotation: { ...d.rotation, speed: v } })} />
         <Seg label="방향" value={String(d.rotation.dir)} options={[['1', '↺ 반시계'], ['-1', '↻ 시계']]} onChange={(v) => p.onDraft({ rotation: { ...d.rotation, dir: v === '1' ? 1 : -1 } })} />
+        <Slider label="링 기울기" value={d.layout.tilt} min={-35} max={35} step={1} fmt={(v) => `${Math.round(v)}°`} onChange={(v) => p.onDraft({ layout: { ...d.layout, tilt: v } })} />
+        <Slider label="기울기 축 방향" value={d.layout.axis} min={0} max={359} step={1} fmt={(v) => `${Math.round(v)}°`} onChange={(v) => p.onDraft({ layout: { ...d.layout, axis: v } })} />
+        <Slider label="링 글자 크기" value={d.layout.scale} min={0.8} max={1.2} step={0.01} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => p.onDraft({ layout: { ...d.layout, scale: v } })} />
       </section>
 
       <section>
         <h3>전체 보기</h3>
-        <Slider label="기울기 (내려다보는 각도)" value={p.view.tilt} min={12} max={80} step={1} fmt={(v) => `${Math.round(v)}°`} onChange={(v) => p.onView({ tilt: v })} />
+        <Seg label="왜곡 표시" value={p.view.effects ? 'on' : 'off'} options={[['on', '켜기'], ['off', '끄기 (배치만 보기)']]} onChange={(v) => p.onView({ effects: v === 'on' })} />
+        <Slider label="카메라 시점 (내려다보는 각도)" value={p.view.tilt} min={12} max={80} step={1} fmt={(v) => `${Math.round(v)}°`} onChange={(v) => p.onView({ tilt: v })} />
         <Slider label="전체 공전 배율" value={p.view.spin} min={0} max={3} step={0.05} fmt={(v) => (v === 0 ? '멈춤' : `×${v.toFixed(2)}`)} onChange={(v) => p.onView({ spin: v })} />
         <p className="note">공전을 멈춰도 각 줄의 왜곡은 계속 움직입니다. 줄별 설정은 이 브라우저에 자동 저장됩니다.</p>
       </section>

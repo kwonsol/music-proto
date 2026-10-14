@@ -94,6 +94,7 @@ describe('determinism', () => {
 describe('ring lines', async () => {
   const { DEFAULT_RINGS } = await import('./data/rings');
   const { defaultParams, controlsOf } = await import('./effects');
+  const { ringFrame } = await import('./render/ring');
   it('예시는 4줄 이상: 1줄 유체, 2줄 회전 잔상, 나머지는 기존 효과', () => {
     expect(DEFAULT_RINGS.length).toBeGreaterThanOrEqual(4);
     expect(DEFAULT_RINGS[0].effect).toBe('fluid');
@@ -103,7 +104,22 @@ describe('ring lines', async () => {
   it('줄마다 고유 ID 와 독립 설정을 가진다', () => {
     expect(new Set(DEFAULT_RINGS.map((l) => l.id)).size).toBe(DEFAULT_RINGS.length);
     expect(DEFAULT_RINGS[0].params).not.toBe(DEFAULT_RINGS[1].params);
-    expect(new Set(DEFAULT_RINGS.map((l) => l.effect)).size).toBe(DEFAULT_RINGS.length);
+    // 이웃한 링끼리 같은 효과를 쓰지 않는다 (일괄 적용 아님)
+    for (let i = 1; i < DEFAULT_RINGS.length; i++) expect(DEFAULT_RINGS[i].effect).not.toBe(DEFAULT_RINGS[i - 1].effect);
+  });
+  it('기본 링은 10~14개, 링마다 고정된 서로 다른 기울기', () => {
+    expect(DEFAULT_RINGS.length).toBeGreaterThanOrEqual(10);
+    expect(DEFAULT_RINGS.length).toBeLessThanOrEqual(14);
+    expect(new Set(DEFAULT_RINGS.map((l) => `${l.layout.tilt}/${l.layout.axis}`)).size).toBe(DEFAULT_RINGS.length);
+  });
+  it('링 평면 좌표계는 직교 단위벡터 (글자는 법선 방향으로 선다)', () => {
+    const { U, V, N } = ringFrame(18, 130);
+    const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    expect(dot(U, V)).toBeCloseTo(0);
+    expect(dot(U, N)).toBeCloseTo(0);
+    expect(dot(V, N)).toBeCloseTo(0);
+    expect(dot(N, N)).toBeCloseTo(1);
+    expect(N[1]).toBeCloseTo(Math.cos((18 * Math.PI) / 180));
   });
   it('새 효과는 전용 조절 항목과 기본값을 가진다', () => {
     expect(controlsOf('fluid').map((c) => c.key)).toEqual(['intensity', 'speed', 'range', 'tail', 'origin']);

@@ -1,5 +1,6 @@
 import { EFFECTS, type Effect, type EffectId, type EffectParams } from '../effects';
 import { clamp, fract } from '../lib/ease';
+import { hash } from '../lib/noise';
 import { lineAt, parseMarked, type LyricLine } from '../data/lyrics';
 import type { DirectionPreset, SemanticTag } from '../data/presets';
 import type { FontInfo } from './fonts';
@@ -50,6 +51,8 @@ export type StripItem = Item;
 interface Item {
   ch: string;
   style: Style | null;
+  /** 글자별 고정 크기 배율 (없으면 1). 간격도 이 크기로 계산되고 기준선은 공유한다 */
+  scale?: number;
 }
 
 interface Rect {
@@ -114,7 +117,7 @@ export class SceneRenderer {
       ctx.rect(rect.x, rect.y, rect.w, rect.h);
       ctx.clip();
       this.load = 1;
-      if (s.mode === 'ring') this.ring.draw(ctx, rect, s.ring.lines, s.ring.view, s.ring.selected, distort, ringItems);
+      if (s.mode === 'ring') this.ring.draw(ctx, rect, s.ring.lines, s.ring.view, s.ring.selected, distort && s.ring.view.effects);
       else if (s.mode === 'repeat') this.drawRepeat(ctx, rect, s, clock, distort);
       else if (s.mode === 'single') this.drawSingle(ctx, rect, itemsFromInput(s), s.input, { kind: 'loop', fx: clock.fx, offset: 0 }, distort);
       else this.drawDemo(ctx, rect, s, clock, distort);
@@ -201,7 +204,7 @@ export class SceneRenderer {
     bottom: number,
     radius = 0,
   ): number {
-    const glyphs = line.map((it) => this.cache.get(it.ch, size));
+    const glyphs = line.map((it) => this.cache.get(it.ch, size * (it.scale ?? 1)));
     const vfit = clamp((bottom - baseline) / (size * 1.5), 0.2, 1);
     const tfit = clamp((baseline - size * CAP - topBound) / (size * 0.8), 0.2, 1);
     const states = line.map((it, i) => (distort && it.style ? stateFor(it, glyphs[i], timing, instance, i, vfit, tfit, stepFor(glyphs[i], this.load), radius > 0 ? radius : size * 3) : null));
@@ -218,9 +221,9 @@ export class SceneRenderer {
     const adv = glyphs.map((g, i) => g.advance + extra[i]);
     const total = adv.reduce((a, b) => a + b, 0);
     let pen = align === 'center' ? ax - total / 2 : ax;
-    const top = Math.round(baseline - size * BASE);
     for (let i = 0; i < line.length; i++) {
       const g = glyphs[i];
+      const top = Math.round(baseline - g.em * BASE);
       if (!g.space) {
         const x = Math.round(pen - g.pad);
         const st = states[i];
@@ -280,13 +283,30 @@ function stateFor(it: Item, g: ReturnType<GlyphCache['get']>, timing: Timing, in
   return { effect, frame: { g, phase, cycle, t, p: params, seed, index, count, fit: 1, vfit, tfit, step, radius } };
 }
 
-/** 링 한 줄 → 글자 목록. [대괄호] 구간에만 그 줄의 효과를 건다 */
-function ringItems(l: RingLine): Item[] {
+/**
+ * 링 한 줄 → 글자 목록. [대괄호] 구간에만 그 줄의 효과를 건다 (effects=false 면 왜곡 없음).
+ * 크기는 단어 단위로 80~125% 사이의 고정값, 핵심 단어([대괄호])는 125~132%.
+ * 줄 ID 와 단어 순서로 정해지므로 매 프레임·설정 변경 때 바뀌지 않는다.
+ */
+export function ringItems(l: RingLine, effects = true): Item[] {
   const { text, ranges } = parseMarked(l.text);
   const effect = EFFECTS[l.effect];
-  const items: Item[] = [...text].filter((ch) => ch !== '\n').map((ch) => ({ ch, style: null }));
-  for (const [a, b] of ranges) {
-    for (let i = a; i < b && i < items.length; i++) items[i].style = { effect, params: l.params, index: i - a, count: b - a };
+  const chars = [...text].filter((ch) => ch !== '\n');
+  const items: Item[] = chars.map((ch) => ({ ch, style: null }));
+  const key = (i: number) => ranges.some(([a, b]) => i >= a && i < b);
+  const idSeed = [...l.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7);
+  let word = 0;
+  let wordScale = 1;
+  for (let i = 0; i < items.length; i++) {
+    if (i === 0 || (chars[i - 1] === ' ' && chars[i] !== ' ')) {
+      wordScale = 0.8 + 0.45 * hash(idSeed, word++);
+    }
+    items[i].scale = key(i) ? 1.25 + 0.07 * hash(idSeed, 999) : wordScale;
+  }
+  if (effects) {
+    for (const [a, b] of ranges) {
+      for (let i = a; i < b && i < items.length; i++) items[i].style = { effect, params: l.params, index: i - a, count: b - a };
+    }
   }
   return items;
 }

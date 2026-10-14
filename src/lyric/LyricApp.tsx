@@ -142,7 +142,7 @@ export default function LyricApp() {
               const line: RingLine = {
                 id: newRingId(),
                 text: '새 가사 [한 줄]',
-                layout: { phase: (rings.length * 77) % 360 },
+                layout: { phase: (rings.length * 77) % 360, tilt: ((rings.length * 37) % 41) - 20, axis: (rings.length * 97) % 360, scale: 1 },
                 rotation: { speed: 4, dir: rings.length % 2 ? -1 : 1 },
                 effect: 'wave',
                 params: defaultParams('wave'),
